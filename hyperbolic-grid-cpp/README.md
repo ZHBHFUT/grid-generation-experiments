@@ -79,8 +79,8 @@ x,y
 | `--diffusion E` | 0.002 | 无量纲光顺系数，0 关闭光顺 |
 | `--smoothing tangent\|full` | height: tangent; original: full | 仅保留切向光顺或完整二阶导数光顺 |
 | `--smoothing-metric wall\|current` | wall | 切向光顺度量：初始壁面弧长差分，或当前层两侧实际点距的倒数差；current 仅支持 tangent 光顺 |
-| `--smoothing-start H` | 0 | 名义推进距离小于该值时关闭光顺（输入长度单位） |
-| `--smoothing-end H` | 0 | 光顺系数逐渐恢复至 diffusion 的距离（输入长度单位）；两参数均为 0 时禁用渐增 |
+| `--smoothing-start H` | height: 0.005L; original: 0 | 名义推进距离小于该值时关闭光顺（输入长度单位） |
+| `--smoothing-end H` | height: 0.05L; original: 0 | 光顺系数逐渐恢复至 diffusion 的距离（输入长度单位）；显式设置两参数为 0 时禁用渐增；L 为壁面包围盒最大边长 |
 | `--max-skew-angle DEG` | 90 | 瞬时切向/法向推进速度比的限制角度，单位度，0～90；90 不限制，0 纯法向；小于 90 仅支持 tangent 光顺 |
 | `--first-layer exact\|march` | height: exact; original: march | 精确法向偏移或方程积分 |
 | `--stencil three-point\|compact` | 隐式: three-point；显式: compact | 非均匀周期三点或紧致差分；隐式仅支持三点 |
@@ -176,7 +176,7 @@ theta=1 为一阶线性化后退 Euler；theta=0.5 为光滑半离散方程的�
 
 默认每个目标层仅求解一次。如果块主元病态、坐标非法、Jacobian 或轮廓检查失败，保持已保存层不变，将该层均分为 2、4、8……个子步重新计算，最多加倍 10 次，且遵守 --max-substeps。所有中间轮廓及最终输出粗层均检查质量。精确偏移首层仍直接计算，不做隐式重试。--max-step 可主动限制子步以控制积分误差；--cfl 只影响显式积分。隐式不是非线性无条件稳定或保正保证。日志 steps 表示成功方案的子步数（精确偏移首层记 1），不包含失败重试。
 
-恢复原显式算法可使用 `--integrator rk4`（默认 compact）；如需仅比较时间推进算法，可在显式模式指定 `--stencil three-point`。
+恢复原显式积分方式可使用 `--integrator rk4`（默认 compact）；如需仅比较时间推进算法，可在显式模式指定 `--stencil three-point`。如需复现旧版不带近壁保护的测试，显式设置 `--smoothing-start 0 --smoothing-end 0`。
 
 ### 切向速度限幅（正交性控制）
 
@@ -220,7 +220,7 @@ Vt = clamp(Vt0, -Vn*tan(phi), Vn*tan(phi))
 
 上述长度和 epsilon 均采用程序内部的归一化量。换算至物理长度时 epsilon_phys = diffusion*L。若两侧长度相等，切向速度为零；否则向较长的一侧移动，趋向均匀点距。点距同比放大时，光顺速度按比例减小。不直接采用当前弧长下的二阶导数，因为精确弧长参数的二阶导数为法向曲率，无法有效驱动切向重分布。
 
-法向项及 D1（固定初始壁面弧长坐标）不变，精确偏移首层不变。每个隐式子步和显式 RK 阶段使用当前坐标重新计算实际点距，不做跨层冻结。默认 wall 保持原算法及旧网格结果；current 仅适用于 tangent 模式，不支持 full。diffusion=0 或 max-skew-angle=0 时仍为纯法向推进。
+法向项及 D1（固定初始壁面弧长坐标）不变，精确偏移首层不变。每个隐式子步和显式 RK 阶段使用当前坐标重新计算实际点距，不做跨层冻结。默认 wall 保留原光顺公式；若需恢复未启用近壁保护的旧结果，同时设置 --smoothing-start 0 --smoothing-end 0。current 仅适用于 tangent 模式，不支持 full。diffusion=0 或 max-skew-angle=0 时仍为纯法向推进。
 
 未限幅时，令 gm=∂Vt0/∂r_(i-1)，gp=∂Vt0/∂r_(i+1)，则：
 
@@ -245,7 +245,7 @@ current 与 wall 的光顺强度不能直接用相同 diffusion 值比较。该�
 
 ### 近壁保护：按名义推进距离逐步恢复光顺
 
-新 current 光顺的倒数点距差在加密壁面附近可能很大，不宜直接在全域使用较强的 diffusion。增加两个距离参数 a=--smoothing-start、b=--smoothing-end，要求 0<=a<b，默认两者均为 0（禁用渐增，保留原结果）。设 H 为累计名义推进距离，令
+新 current 光顺的倒数点距差在加密壁面附近可能很大，不宜直接在全域使用较强的 diffusion。height 模式默认开启近壁保护：如果未指定任一距离参数，自动设置 a=0.005L、b=0.05L，L 为壁面包围盒最大边长。original 模式默认 a=b=0，以保持原算法兼容性。显式指定任一距离参数时，按原命令行语义使用给定值，另一参数未指定则为 0；要求 0<=a<b 或两者均为 0（关闭保护）。设 H 为累计名义推进距离，令
 
 ```text
 u = clamp((H-a)/(b-a), 0, 1)
@@ -254,13 +254,13 @@ epsilon_eff = diffusion * u^2 * (3-2*u)
 
 在每个输出层的名义推进距离中点取 H，并在该层的隐式子步及显式 RK 各阶段保持该预定系数不变。实际点距、法向和其解析 Jacobian 仍按原算法随坐标更新。对 wall/current 和所有支持的积分器均有效，保留角度限幅及质量检查。逐层日志新增 effective-diffusion。距离参数使用输入坐标长度单位，height 模式下是名义距离而非逐点真实壁面距离；original 模式中仍为推进参数。渐增的系数冻结在输出层尺度，max-step 细分不会进一步细分这个系数。首层精确偏移不受影响。
 
-对于单位弦长加密 NACA0012，60 层、h1=1e-4、q=1.15，推荐：
+对于单位弦长加密 NACA0012，60 层、h1=1e-4、q=1.15，默认自动距离即为 0.005/0.05，无需再显式指定，推荐：
 
 ```powershell
-.\build\Release\hypergrid.exe --input examples/naca0012_clustered.csv --output mesh.xyz --first-height 0.0001 --growth 1.15 --layers 60 --theta 0.5 --smoothing-metric current --diffusion 0.03 --smoothing-start 0.005 --smoothing-end 0.05
+.\build\Release\hypergrid.exe --input examples/naca0012_clustered.csv --output mesh.xyz --first-height 0.0001 --growth 1.15 --layers 60 --theta 0.5 --smoothing-metric current --diffusion 0.03
 ```
 
-前 15 层坐标与纯法向推进完全相同，前 10 层平均四角正交偏差从 10.7265 度降至 1.1250 度，外侧 10 层平均/最大偏差 2.298/8.706 度，最外层周向点距比 18.046，60 层仍只需 60 次推进（含首层偏移）。参数需结合实际边界层厚度选择。注意单块 O 型锐尾缘共用节点的两侧壁面切向并不共线，通常不可能使同一条法向网格线同时与两侧壁面正交；该改动不能消除锐尾缘固有的局部角度误差。
+前 15 层坐标与纯法向推进完全相同，前 10 层平均四角正交偏差从 10.7265 度降至 1.1250 度，外侧 10 层平均/最大偏差 2.298/8.706 度，最外层周向点距比 18.046，60 层仍只需 60 次推进（含首层偏移）。自动距离是几何尺度启发式默认值，并非物理边界层厚度模型；参数需结合实际边界层厚度选择。首层仍沿离散节点法向精确偏移；新增日志 Wall orthogonality (deg)，分别报告与离散节点切线的最大偏差 nodal max，以及与相邻壁面线段的平均和最大偏差 face mean/max。smoothing-ramp=auto/manual/off 表示实际采用的控制方式。该算例 nodal max 约为 3.12e-11 度，face mean/max 为 1.125/81.7385 度。注意单块 O 型锐尾缘共用节点的两侧壁面切向并不共线，通常不可能使同一条法向网格线同时与两侧壁面正交；该改动不能消除锐尾缘固有的局部角度误差。
 
 ### 稳定性与质量
 

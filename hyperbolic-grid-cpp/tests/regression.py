@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory() as d:
     wall=EXAMPLES/'naca0012_clustered.csv'
     for theta in ('1','0.5'):
         out=d/f'clustered-{theta}.xyz'
-        p=run(wall,out,'--first-height','0.0001','--growth','1.15','--layers','60','--theta',theta)
+        p=run(wall,out,'--first-height','0.0001','--growth','1.15','--layers','60','--theta',theta,'--smoothing-start','0','--smoothing-end','0')
         g=read_grid(out);assert (len(g[0]),len(g))==(161,61)
         steps=list(map(int,re.findall(r'steps=(\d+)',p.stdout)))
         assert len(steps)==60 and sum(steps)==60,steps
@@ -132,7 +132,7 @@ with tempfile.TemporaryDirectory() as d:
                     c=abs(a[0]*b[0]+a[1]*b[1])/(math.hypot(*a)*math.hypot(*b))
                     angles.append(math.degrees(math.asin(min(1.0,c))))
         return sum(angles)/len(angles)
-    args=['--first-height','0.0001','--growth','1.15','--layers','60','--theta','0.5']
+    args=['--first-height','0.0001','--growth','1.15','--layers','60','--theta','0.5','--smoothing-start','0','--smoothing-end','0']
     baseline=read_grid(d/'clustered-0.5.xyz')
     for angle in ('90','10','5','0'):
         out=d/f'skew-{angle}.xyz'
@@ -159,7 +159,7 @@ with tempfile.TemporaryDirectory() as d:
         run(wall,d/'bad-angle.xyz',*args,'--max-skew-angle',angle,success=False)
     run(wall,d/'bad-smoothing.xyz',*args,'--smoothing','full','--max-skew-angle','5',success=False)
     # Current physical spacing smoothing: independent of wall arc-length metric.
-    args=['--first-height','0.0001','--growth','1.15','--layers','60','--theta','0.5']
+    args=['--first-height','0.0001','--growth','1.15','--layers','60','--theta','0.5','--smoothing-start','0','--smoothing-end','0']
     for eps in ('0.002','0.03'):
         out=d/f'current-{eps}.xyz'
         p=run(wall,out,*args,'--smoothing-metric','current','--diffusion',eps)
@@ -202,6 +202,38 @@ with tempfile.TemporaryDirectory() as d:
     out=d/'ramp-off.xyz'
     run(wall,out,*args,'--smoothing-metric','current','--diffusion','0.03','--smoothing-start','0','--smoothing-end','0')
     assert read_grid(out)==read_grid(d/'current-0.03.xyz')
+    # Auto near-wall protection is now the default in height mode, including
+    # current and wall metrics. Explicit zero/zero recovers the old behavior.
+    autoargs=['--first-height','0.0001','--growth','1.15','--layers','60','--theta','0.5']
+    for metric,eps0 in [('wall','0.002'),('current','0.03')]:
+        out=d/f'auto-{metric}.xyz'
+        p=run(wall,out,*autoargs,'--smoothing-metric',metric,'--diffusion',eps0)
+        g=read_grid(out);assert g[:16]==normal[:16]
+        min_scaled_j(g)
+        assert 'smoothing-ramp=auto smoothing-start=0.005 smoothing-end=0.05' in p.stdout
+        schedule=list(map(float,re.findall(r'effective-diffusion=([0-9.eE+-]+)',p.stdout)))
+        assert schedule[:15]==[0]*15 and schedule[-1]==float(eps0)
+        nodal=float(re.search(r'Wall orthogonality \(deg\): nodal max=([0-9.eE+-]+)',p.stdout)[1])
+        assert nodal<1e-7,nodal
+        manual=d/f'manual-{metric}.xyz'
+        run(wall,manual,*autoargs,'--smoothing-metric',metric,'--diffusion',eps0,'--smoothing-start','0.005','--smoothing-end','0.05')
+        assert g==read_grid(manual)
+        print(f'auto {metric}: first 15 layers pure normal, wall nodal deviation {nodal:.3e} deg')
+    # Scale the wall and the first layer by the same factor. Automatic distances
+    # and normalized mesh should be scale-invariant (up to round-off).
+    with wall.open() as f: pts=[tuple(map(float,r)) for r in list(csv.reader(f))[1:]]
+    scaled_wall=d/'scaled-wall.csv';write_ring(scaled_wall,[(4*x,4*y) for x,y in pts])
+    out=d/'scaled-auto.xyz'
+    p=run(scaled_wall,out,'--first-height','0.0004','--growth','1.15','--layers','60','--theta','0.5','--smoothing-metric','current','--diffusion','0.03')
+    assert 'smoothing-ramp=auto smoothing-start=0.02 smoothing-end=0.2' in p.stdout
+    g=read_grid(out);ref=read_grid(d/'auto-current.xyz')
+    assert max(math.dist((a[0]/4,a[1]/4),b) for r,s in zip(g,ref) for a,b in zip(r,s))<1e-10
+    # Original mode continues to opt out unless explicit ramp distances are given.
+    circle=EXAMPLES/'circle.csv';origargs=['--mode','original','--first-height','0.001','--growth','1','--layers','4']
+    p=run(circle,d/'original-auto.xyz',*origargs)
+    assert 'smoothing-ramp=off' in p.stdout
+    run(circle,d/'original-off.xyz',*origargs,'--smoothing-start','0','--smoothing-end','0')
+    assert read_grid(d/'original-auto.xyz')==read_grid(d/'original-off.xyz')
     # Explicit integrator also honors the same coefficient schedule.
     args=['--first-height','0.0001','--layers','5','--integrator','rk4','--stencil','three-point']
     run(wall,d/'explicit-ramp.xyz',*args,'--smoothing-metric','current','--diffusion','0.03','--smoothing-start','0.005','--smoothing-end','0.05')
@@ -213,7 +245,7 @@ with tempfile.TemporaryDirectory() as d:
     p=run(EXAMPLES/'circle.csv',out,'--first-height','0.001','--growth','1','--layers','2','--max-step','0.0003')
     assert list(map(int,re.findall(r'steps=(\d+)',p.stdout)))==[1,4]
     min_scaled_j(read_grid(out))
-    run(wall,d/'bad-implicit.xyz','--first-height','0.005','--growth','1.2','--layers','2','--max-substeps','16',success=False)
+    run(wall,d/'bad-implicit.xyz','--first-height','0.005','--growth','1.2','--layers','2','--max-substeps','16','--smoothing-start','0','--smoothing-end','0',success=False)
     run(wall,d/'bad-stencil.xyz','--first-height','0.0001','--layers','1','--stencil','compact',success=False)
     # Reject malformed input, clockwise boundaries and oversized invalid first layer.
     bad=d/'clockwise.csv';write_ring(bad,r[::-1]);run(bad,d/'bad.xyz','--first-height','0.001','--layers','1',success=False)

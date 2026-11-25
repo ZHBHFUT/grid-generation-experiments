@@ -52,7 +52,7 @@ struct Options {
     double h=0,growth=1.15,alpha=-1,diffusion=0.002,cfl=0.25,max_step=0,theta=1,max_skew_angle=90;
     double smoothing_start=0,smoothing_end=0;
     double max_skew_ratio=std::numeric_limits<double>::infinity();
-    bool alpha_set=false, multiblock=false, quiet=false;
+    bool alpha_set=false, smoothing_ramp_set=false, multiblock=false, quiet=false;
     size_t layers=0,max_substeps=1000000;
 };
 static void help() {
@@ -73,9 +73,12 @@ Options:
   --smoothing tangent|full  Default tangent (height) or full (original)
   --smoothing-metric wall|current  Tangent smoothing metric (default wall)
                           current uses adjacent physical edge lengths
-  --smoothing-start H     No smoothing before nominal distance H (default 0)
-  --smoothing-end H       Smooth ramp to full strength at H (default 0: disabled)
-                          Both distances in input length units; end > start
+  --smoothing-start H     No smoothing before nominal distance H
+  --smoothing-end H       Smooth ramp to full strength at H
+                          If neither is set: height mode uses 0.005*L / 0.05*L,
+                          original mode uses 0 / 0. L is the wall reference length.
+                          Explicit distances use input length units; end > start.
+                          Set both to 0 to disable the ramp.
   --max-skew-angle DEG    Limit tangent/normal RHS speed ratio to tan(DEG)
                           0..90 degrees; 90=disabled (default), 0=pure normal
                           Enabled only for tangent smoothing
@@ -109,8 +112,8 @@ static Options parse(int argc,char** argv) {
         else if(k=="--first-height") o.h=number(v); else if(k=="--growth") o.growth=number(v);
         else if(k=="--layers") o.layers=integer(v); else if(k=="--mode") o.mode=v;
         else if(k=="--alpha") {o.alpha=number(v);o.alpha_set=true;} else if(k=="--diffusion") o.diffusion=number(v);
-        else if(k=="--smoothing-start") o.smoothing_start=number(v);
-        else if(k=="--smoothing-end") o.smoothing_end=number(v);
+        else if(k=="--smoothing-start") {o.smoothing_start=number(v);o.smoothing_ramp_set=true;}
+        else if(k=="--smoothing-end") {o.smoothing_end=number(v);o.smoothing_ramp_set=true;}
         else if(k=="--max-skew-angle") o.max_skew_angle=number(v);
         else if(k=="--smoothing-metric") o.smoothing_metric=v;
         else if(k=="--smoothing") o.smoothing=v; else if(k=="--first-layer") o.first_layer=v;
@@ -307,6 +310,26 @@ static Quality quality(const Ring& a,const Ring& b,const Ring& tangents) {
     }
     return q;
 }
+// Distinguish orthogonality to the discrete nodal tangent from the two
+// adjacent wall faces. A single radial line cannot be perpendicular to
+// both faces at a sharp corner, even for an exact normal first offset.
+static void report_wall_orthogonality(const Ring& a,const Ring& b,const Ring& t){
+    const double rad_to_deg=180/std::acos(-1.0);
+    auto deviation=[&](Vec e,Vec d){
+        return rad_to_deg*std::asin(std::clamp(std::abs(dot(e/norm(e),d/norm(d))),0.0,1.0));
+    };
+    const size_t n=a.size();
+    double node_max=0,face_max=0,face_mean=0;
+    for(size_t i=0;i<n;++i){
+        const Vec d=b[i]-a[i];
+        const double m=deviation(a[i]-a[prev(i,n)],d),p=deviation(a[next(i,n)]-a[i],d);
+        node_max=std::max(node_max,deviation(t[i],d));
+        face_max=std::max({face_max,m,p});
+        face_mean+=(m+p)/(2*static_cast<double>(n));
+    }
+    std::cout<<"Wall orthogonality (deg): nodal max="<<node_max
+             <<" face mean/max="<<face_mean<<"/"<<face_max<<'\n';
+}
 #include "implicit.hpp"
 class Marcher {
     const Options& o_;const Wall& w_;size_t n_;Derivative d1_,d2_;implicit::Stepper implicit_;
@@ -401,6 +424,7 @@ public:
                 else if(o_.integrator=="implicit")steps=implicit_.advance(b,h,t,eps);
                 else steps=advance(b,h,eps);
                 const auto q=quality(a,b,t);if(o_.check=="global")check_contours(b,&a);
+                if(j==1)report_wall_orthogonality(a,b,t);
                 xi+=h;
                 if(!o_.quiet)std::cout<<"layer "<<std::setw(4)<<j<<" target="<<h*w_.scale<<" normal[min/mean/max]="<<q.min_h*w_.scale<<"/"<<q.mean_h*w_.scale<<"/"<<q.max_h*w_.scale<<" minJ="<<q.min_jac<<" steps="<<steps<<" effective-diffusion="<<(j==1&&o_.first_layer=="exact"?0:eps)<<'\n';
                 grid.push_back(std::move(b));h*=o_.growth;
@@ -429,15 +453,23 @@ static void write_plot3d(const Grid& g,const Wall& wall,const Options& o) {
 int main(int argc,char** argv){
     try{
         if(argc==1){help();return 1;}if(argc==2&&std::string(argv[1])=="--help"){help();return 0;}
-        const auto o=parse(argc,argv);namespace fs=std::filesystem;
+        auto o=parse(argc,argv);namespace fs=std::filesystem;
         if(fs::absolute(o.input).lexically_normal()==fs::absolute(o.output).lexically_normal()||(fs::exists(o.output)&&fs::equivalent(o.input,o.output)))throw std::runtime_error("Input and output must be different files");
         auto w=read_wall(o.input);check_contours(w.p);
+        // Default to near-wall protection in the physical-height mode. Explicit
+        // start/end values (including zero/zero) retain their old meanings.
+        if(!o.smoothing_ramp_set&&o.mode=="height"){
+            o.smoothing_start=0.005*w.scale;
+            o.smoothing_end=0.05*w.scale;
+            if(!(o.smoothing_end>o.smoothing_start))throw std::runtime_error("Automatic smoothing distances underflow; rescale the wall coordinates");
+        }
         const auto minmax=std::minmax_element(w.ds.begin(),w.ds.end());
         std::cout<<std::setprecision(7)<<"Wall points: "<<w.p.size()<<"; reference length: "<<w.scale<<"; min/max wall segment: "<<*minmax.first*w.scale<<"/"<<*minmax.second*w.scale<<'\n';
         std::cout<<"mode="<<o.mode<<" alpha="<<o.alpha<<" diffusion="<<o.diffusion<<" smoothing="<<o.smoothing<<" first-layer="<<o.first_layer<<" stencil="<<o.stencil<<" integrator="<<o.integrator;
         if(o.integrator=="implicit")std::cout<<" theta="<<o.theta;
         std::cout<<" max-skew-angle="<<o.max_skew_angle<<" smoothing-metric="<<o.smoothing_metric;
-        if(o.smoothing_end>0)std::cout<<" smoothing-start="<<o.smoothing_start<<" smoothing-end="<<o.smoothing_end;
+        std::cout<<" smoothing-ramp="<<(o.smoothing_end==0?"off":o.smoothing_ramp_set?"manual":"auto")
+                 <<" smoothing-start="<<o.smoothing_start<<" smoothing-end="<<o.smoothing_end;
         std::cout<<'\n';
         Marcher m(o,w);auto g=m.generate();write_plot3d(g,w,o);
         std::cout<<"Wrote "<<o.output<<" (I="<<w.p.size()+1<<", J="<<g.size()<<", I-order="<<o.i_order<<")\n";

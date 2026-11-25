@@ -208,3 +208,32 @@ line cannot be perpendicular to both. This is a topology limitation.
 Tests additionally check disabled ramp reproduces old results, effective
 coefficient schedule, explicit RK4 protected layers, invalid ramp inputs.
 No Windows/MSVC test performed.
+
+============================================================
+Default near-wall protection in height mode
+============================================================
+Linux GCC 14.2.0, CMake Release; CTest PASS (1/1, 1.68 s).
+Auto start/end = 0.005/0.05 times wall reference length if neither
+distance is specified. Original mode keeps ramp off by default.
+Manual distances retain previous semantics; explicit zero/zero disables.
+The original source and test files were reconstructed and verified
+against the previous GitHub blob hashes before local modifications.
+
+NACA0012 clustered, 160 independent nodes, h1=1e-4, q=1.15,
+60 layers, theta=0.5, tangent smoothing, global checks:
+Metric  Diffusion  Ramp   Mean1-10  Mean51-60  Max51-60  Outer spacing ratio
+wall     0.002     off     1.303877   6.538510  28.559091    9.391859
+wall     0.002     auto    1.125000   6.547459  28.364275    9.379105
+current  0.03      off    10.726453   2.315789   8.942111   18.561518
+current  0.03      auto    1.125000   2.298047   8.706141   18.045922
+All four passed quality checks with minimum scaled Jacobian 0.1436912,
+60 advances including first exact offset. Both auto modes match the
+pure-normal grid through layer 15 and the corresponding manual ramp
+throughout. First-layer nodal orthogonality error max 3.123941e-11 deg;
+actual wall face corner mean/max deviation 1.125/81.7385 deg (sharp TE).
+New log distinguishes nodal and face-angle measures.
+Regression tests check scale invariance (factor 4), automatic/manual
+equivalence, zero/zero compatibility, original-mode opt-out, and near-wall
+normality. Historical no-ramp comparisons explicitly disable the ramp.
+No Windows/MSVC validation. Automatic distances are geometric heuristics,
+not a universal guarantee of valid grids or 90-degree face angles.
