@@ -47,9 +47,9 @@ static size_t integer(const std::string& s) {
     return static_cast<size_t>(x);
 }
 struct Options {
-    std::string input,output="grid.xyz",mode="height",stencil="compact",integrator="rk4";
+    std::string input,output="grid.xyz",mode="height",stencil,integrator="implicit";
     std::string smoothing,first_layer,format="2d",i_order="cw",check="global";
-    double h=0,growth=1.15,alpha=-1,diffusion=0.002,cfl=0.25,max_step=0;
+    double h=0,growth=1.15,alpha=-1,diffusion=0.002,cfl=0.25,max_step=0,theta=1;
     bool alpha_set=false, multiblock=false, quiet=false;
     size_t layers=0,max_substeps=1000000;
 };
@@ -70,9 +70,10 @@ Options:
                           Physical coefficient = E * max(bbox width,height)
   --smoothing tangent|full  Default tangent (height) or full (original)
   --first-layer exact|march Default exact (height) or march (original)
-  --stencil compact|three-point  Nonuniform periodic derivative (default compact)
-  --integrator euler|rk2|rk4      Explicit integrator (default rk4)
-  --cfl C                 Substep safety factor (0<C<=1; default 0.25)
+  --stencil three-point|compact  Default three-point (implicit) or compact (explicit)
+  --integrator implicit|euler|rk2|rk4  Default implicit (linearized theta method)
+  --theta T               Implicit theta, 0.5<=T<=1 (default 1: backward Euler)
+  --cfl C                 Explicit-only substep safety factor (0<C<=1; default 0.25)
   --max-step H            Optional max substep, in input units (0=automatic)
   --max-substeps N        Per-layer limit (default 1000000)
   --format 2d|3d          Plot3D coordinates; 3d uses K=1 and Z=0 (default 2d)
@@ -100,7 +101,7 @@ static Options parse(int argc,char** argv) {
         else if(k=="--alpha") {o.alpha=number(v);o.alpha_set=true;} else if(k=="--diffusion") o.diffusion=number(v);
         else if(k=="--smoothing") o.smoothing=v; else if(k=="--first-layer") o.first_layer=v;
         else if(k=="--stencil") o.stencil=v; else if(k=="--integrator") o.integrator=v;
-        else if(k=="--cfl") o.cfl=number(v); else if(k=="--max-step") o.max_step=number(v);
+        else if(k=="--theta") o.theta=number(v); else if(k=="--cfl") o.cfl=number(v); else if(k=="--max-step") o.max_step=number(v);
         else if(k=="--max-substeps") o.max_substeps=integer(v); else if(k=="--format") o.format=v;
         else if(k=="--i-order") o.i_order=v; else if(k=="--check") o.check=v;
         else throw std::runtime_error("Unknown option: "+k);
@@ -113,8 +114,11 @@ static Options parse(int argc,char** argv) {
     if(o.growth<=0||o.alpha<0||o.diffusion<0||o.cfl<=0||o.cfl>1||o.max_step<0||o.max_substeps==0) throw std::runtime_error("Invalid numeric control parameter");
     if(o.smoothing!="tangent"&&o.smoothing!="full") throw std::runtime_error("Invalid --smoothing");
     if(o.first_layer!="exact"&&o.first_layer!="march") throw std::runtime_error("Invalid --first-layer");
+    if(o.stencil.empty())o.stencil=o.integrator=="implicit"?"three-point":"compact";
+    if(o.theta<0.5||o.theta>1)throw std::runtime_error("Invalid --theta (expected 0.5 to 1)");
+    if(o.integrator=="implicit"&&o.stencil!="three-point")throw std::runtime_error("Implicit integration requires --stencil three-point; use --integrator rk4 for compact");
     if(o.stencil!="compact"&&o.stencil!="three-point") throw std::runtime_error("Invalid --stencil");
-    if(o.integrator!="euler"&&o.integrator!="rk2"&&o.integrator!="rk4") throw std::runtime_error("Invalid --integrator");
+    if(o.integrator!="implicit"&&o.integrator!="euler"&&o.integrator!="rk2"&&o.integrator!="rk4") throw std::runtime_error("Invalid --integrator");
     if(o.format!="2d"&&o.format!="3d") throw std::runtime_error("Invalid --format");
     if(o.i_order!="cw"&&o.i_order!="ccw") throw std::runtime_error("Invalid --i-order");
     if(o.check!="local"&&o.check!="global") throw std::runtime_error("Invalid --check");
@@ -279,8 +283,9 @@ static Quality quality(const Ring& a,const Ring& b,const Ring& tangents) {
     }
     return q;
 }
+#include "implicit.hpp"
 class Marcher {
-    const Options& o_;const Wall& w_;size_t n_;Derivative d1_,d2_;
+    const Options& o_;const Wall& w_;size_t n_;Derivative d1_,d2_;implicit::Stepper implicit_;
     Ring tangent_,curvature_,k1_,k2_,k3_,k4_,tmp_,trial_;
     double rhs(const Ring& r,Ring& k) {
         d1_.compute(r,tangent_);if(o_.diffusion>0)d2_.compute(r,curvature_);
@@ -308,7 +313,7 @@ class Marcher {
         for(auto p:trial_)if(!finite(p))throw std::runtime_error("Nonfinite marching coordinate");
     }
 public:
-    Marcher(const Options& o,const Wall& w):o_(o),w_(w),n_(w.p.size()),d1_(w.ds,1,o.stencil=="compact"),d2_(w.ds,2,o.stencil=="compact"),tangent_(n_),curvature_(n_),k1_(n_),k2_(n_),k3_(n_),k4_(n_),tmp_(n_),trial_(n_){}
+    Marcher(const Options& o,const Wall& w):o_(o),w_(w),n_(w.p.size()),d1_(w.ds,1,o.stencil=="compact"),d2_(w.ds,2,o.stencil=="compact"),implicit_(o,w,d1_,d2_),tangent_(n_),curvature_(n_),k1_(n_),k2_(n_),k3_(n_),k4_(n_),tmp_(n_),trial_(n_){}
     Ring tangents(const Ring& r) {Ring t(n_);d1_.compute(r,t);for(size_t i=0;i<n_;++i)if(!(norm(t[i])>1e-12&&finite(t[i])))throw std::runtime_error("Degenerate tangent at point "+std::to_string(i+1));return t;}
     size_t advance(Ring& r,double h) {
         double done=0;size_t steps=0;
@@ -340,6 +345,7 @@ public:
                 if(!(h>0&&std::isfinite(h)))throw std::runtime_error("Invalid layer increment");
                 const Ring& a=grid.back();Ring b=a;const Ring t=tangents(a);size_t steps=0;
                 if(j==1&&o_.first_layer=="exact") {for(size_t i=0;i<n_;++i)b[i]=a[i]+right_normal(t[i])/norm(t[i])*h;steps=1;}
+                else if(o_.integrator=="implicit")steps=implicit_.advance(b,h,t);
                 else steps=advance(b,h);
                 const auto q=quality(a,b,t);if(o_.check=="global")check_contours(b,&a);
                 xi+=h;
@@ -375,7 +381,9 @@ int main(int argc,char** argv){
         auto w=read_wall(o.input);check_contours(w.p);
         const auto minmax=std::minmax_element(w.ds.begin(),w.ds.end());
         std::cout<<std::setprecision(7)<<"Wall points: "<<w.p.size()<<"; reference length: "<<w.scale<<"; min/max wall segment: "<<*minmax.first*w.scale<<"/"<<*minmax.second*w.scale<<'\n';
-        std::cout<<"mode="<<o.mode<<" alpha="<<o.alpha<<" diffusion="<<o.diffusion<<" smoothing="<<o.smoothing<<" first-layer="<<o.first_layer<<" stencil="<<o.stencil<<" integrator="<<o.integrator<<'\n';
+        std::cout<<"mode="<<o.mode<<" alpha="<<o.alpha<<" diffusion="<<o.diffusion<<" smoothing="<<o.smoothing<<" first-layer="<<o.first_layer<<" stencil="<<o.stencil<<" integrator="<<o.integrator;
+        if(o.integrator=="implicit")std::cout<<" theta="<<o.theta;
+        std::cout<<'\n';
         Marcher m(o,w);auto g=m.generate();write_plot3d(g,w,o);
         std::cout<<"Wrote "<<o.output<<" (I="<<w.p.size()+1<<", J="<<g.size()<<", I-order="<<o.i_order<<")\n";
         return 0;

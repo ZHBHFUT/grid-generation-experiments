@@ -2,6 +2,7 @@
 import csv
 import math
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -70,7 +71,7 @@ with tempfile.TemporaryDirectory() as d:
     # Original alpha=1 equation, no diffusion: r^2=R^2+2R_eff xi.
     # R_eff accounts for initial eta defined by polygon edge length instead of true arc.
     out=d/'original.xyz';h=0.002;q=1.12;n=20
-    run(wall,out,'--first-height',str(h),'--growth',str(q),'--layers',str(n),'--mode','original','--diffusion','0','--quiet')
+    run(wall,out,'--first-height',str(h),'--growth',str(q),'--layers',str(n),'--mode','original','--diffusion','0','--integrator','rk4','--quiet')
     g=read_grid(out);reff=0.5*math.sin(math.pi/120)/(math.pi/120);xi=0;err=0
     for j,r in enumerate(g):
         if j:xi+=h*q**(j-1)
@@ -97,6 +98,36 @@ with tempfile.TemporaryDirectory() as d:
         g=read_grid(out,True,3);assert g[0]==r+[r[0]]
         assert len(g)==7 and len(g[0])==101
         print(f'nonuniform / {stencil} / {integ}: min scaled Jacobian {min_scaled_j(g,-1):.6f}')
+    # Linearized implicit theta scheme: test temporal convergence against the
+    # exact radius for the *three-point spatially discretized* circle equation.
+    for theta,order in [(1.0,1),(0.5,2)]:
+        errors=[]
+        for n in (10,20,40):
+            out=d/f'implicit-circle-{theta}-{n}.xyz'
+            run(EXAMPLES/'circle.csv',out,'--mode','original','--diffusion','0','--theta',str(theta),'--first-height',str(0.2/n),'--growth','1','--layers',str(n),'--quiet')
+            g=read_grid(out);rad=math.sqrt(0.25+0.2/math.cos(math.pi/120))
+            errors.append(max(abs(math.hypot(*p)-rad) for p in g[-1]))
+            min_scaled_j(g)
+        assert all(0.8*2**order<a/b<1.3*2**order for a,b in zip(errors,errors[1:])),errors
+        print(f'implicit circle theta={theta}: errors {errors}')
+    # The clustered 60-layer wing should need only one solve per marched layer.
+    wall=EXAMPLES/'naca0012_clustered.csv'
+    for theta in ('1','0.5'):
+        out=d/f'clustered-{theta}.xyz'
+        p=run(wall,out,'--first-height','0.0001','--growth','1.15','--layers','60','--theta',theta)
+        g=read_grid(out);assert (len(g[0]),len(g))==(161,61)
+        steps=list(map(int,re.findall(r'steps=(\d+)',p.stdout)))
+        assert len(steps)==60 and sum(steps)==60,steps
+        err=max(abs(math.dist(a,b)-1e-4) for a,b in zip(g[0],g[1]))
+        assert err<1e-12 and min_scaled_j(g)>0.1
+        print(f'clustered NACA0012 theta={theta}: 60 advances, min scaled Jacobian {min_scaled_j(g):.6f}')
+    # Explicit max-step still enforces substeps in implicit mode (except exact first layer).
+    out=d/'subdivided.xyz'
+    p=run(EXAMPLES/'circle.csv',out,'--first-height','0.001','--growth','1','--layers','2','--max-step','0.0003')
+    assert list(map(int,re.findall(r'steps=(\d+)',p.stdout)))==[1,4]
+    min_scaled_j(read_grid(out))
+    run(wall,d/'bad-implicit.xyz','--first-height','0.005','--growth','1.2','--layers','2','--max-substeps','16',success=False)
+    run(wall,d/'bad-stencil.xyz','--first-height','0.0001','--layers','1','--stencil','compact',success=False)
     # Reject malformed input, clockwise boundaries and oversized invalid first layer.
     bad=d/'clockwise.csv';write_ring(bad,r[::-1]);run(bad,d/'bad.xyz','--first-height','0.001','--layers','1',success=False)
     bad=d/'duplicate.csv';write_ring(bad,r[:2]+r[1:]);run(bad,d/'duplicate.xyz','--first-height','0.001','--layers','1',success=False)

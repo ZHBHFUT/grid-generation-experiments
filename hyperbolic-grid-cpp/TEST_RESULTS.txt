@@ -55,3 +55,49 @@ layer   39 target=0.02025433 normal[min/mean/max]=0.02000836/0.02024692/0.020264
 layer   40 target=0.02329248 normal[min/mean/max]=0.02299067/0.02328299/0.02331348 minJ=0.8310289 steps=36
 Nominal total marching distance: 0.177909
 Wrote /tmp/naca.xyz (I=161, J=41, I-order=cw)
+
+============================================================
+Linearized implicit update (2026-11-25)
+============================================================
+Linux GCC 14.2.0 / CMake 3.31.6 Release. CTest: PASS (1/1).
+The preceding report is the original explicit baseline.
+
+Clustered NACA0012, 160 distinct CCW nodes, h1=1e-4, q=1.15,
+height mode, diffusion=0.002, tangent smoothing, global checks enabled.
+Elapsed time: median of 3 separate processes, including CSV/Plot3D I/O.
+Method                 Layers  Advances  Max/layer  Time (s)
+RK4 compact                40      2723        347     0.09858
+RK4 compact                60     36652       3939     1.11237
+RK4 three-point            40      1095        141     0.02598
+RK4 three-point            60     17675       2302     0.28955
+Implicit theta=1           40        40          1     0.00914
+Implicit theta=1           60        60          1     0.01229
+Implicit theta=0.5         40        40          1     0.01038
+Implicit theta=0.5         60        60          1     0.01276
+Advances include the exact first-layer offset (not a linear solve).
+All grids passed corner Jacobian, positive normal height, and contour checks.
+Minimum scaled Jacobian: 0.1436912 for all cases.
+60-layer minimum/nominal projected height ratio:
+RK4 three-point 0.98544, implicit theta=1 0.97205, theta=0.5 0.98479.
+60-layer max node position difference vs RK4 three-point:
+theta=1: 0.145022 chord; theta=0.5: 0.011322 chord.
+40-layer max node position difference vs RK4 three-point:
+theta=1: 0.005763 chord; theta=0.5: 0.000285 chord.
+Implicit integration is not pointwise identical to fine-step RK4.
+Use theta=0.5 or --max-step for tighter marching accuracy.
+
+Original-mode circle, alpha=1, zero diffusion, total xi=0.2, fixed h:
+Exact semi-discrete radius sqrt(0.25+0.2/cos(pi/120)).
+Layers            10            20            40
+theta=1     2.26963e-3    1.11544e-3    5.52833e-4
+theta=0.5   3.41801e-5    8.41706e-6    2.08820e-6
+First- and second-order temporal convergence verified, respectively.
+
+Additional standalone verification (seed 42):
+800 finite-difference comparisons of analytic A/B, both smoothing modes
+and alpha=0,0.5,1,2: max directional derivative error 2.192e-10.
+300 random diagonally dominant periodic block systems (5/17/160 blocks):
+max solution error 5.979e-16.
+Regression suite also checks --max-step subdivision and rejection of invalid
+layers, incompatible stencils, clockwise and self-crossing walls.
+No Windows/MSVC timing or compilation test performed in this update.
