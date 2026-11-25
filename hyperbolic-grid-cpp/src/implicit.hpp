@@ -66,18 +66,61 @@ inline Vec linearize(Vec v,Vec z,double alpha,double eps,bool tangent,Mat& A,Mat
     if(tangent&&eps>0)A=A+(Q*dot(t,z)+outer(t,Q*z))*(eps/s);
     return n*speed+B*z;
 }
+// Local length-based tangential redistribution, with exact gradients of
+// Vt_raw = eps * (1/l_minus - 1/l_plus). Positive means move forward.
+struct Spacing {double raw;Vec gm,gp;};
+inline Spacing spacing(Vec rm,Vec r,Vec rp,double eps){
+    const Vec em=r-rm,ep=rp-r;
+    const double lm=norm(em),lp=norm(ep);
+    if(!(lm>1e-13&&lp>1e-13&&std::isfinite(lm)&&std::isfinite(lp)))
+        throw std::runtime_error("Degenerate edge in current-spacing smoothing");
+    const double im=1/lm,ip=1/lp;
+    return {eps*(im-ip),em*(eps*im*im*im),ep*(eps*ip*ip*ip)};
+}
+// gm and gp are derivatives with respect to previous and next coordinates;
+// the center derivative follows by translation invariance. A is dF/dv.
+inline Vec linearize_current(Vec v,const Spacing& e,double alpha,double ratio,
+                             Mat& A,Mat& Gm,Mat& Gp){
+    const double s=norm(v);
+    if(!(s>1e-12&&std::isfinite(s)))throw std::runtime_error("Degenerate tangent in implicit step");
+    const Vec t=v/s,n=right_normal(t);
+    const Mat P=outer(t,t),Q=eye()-P,R{0,1,-1,0},K=eye()-P*(1+alpha);
+    const double speed=std::pow(s,-alpha);
+    A=R*K*(speed/s);
+    Gm=Gp=Mat{};
+    if(std::isfinite(ratio)&&(ratio==0||std::abs(e.raw)>ratio*speed)){
+        const double c=std::copysign(ratio,e.raw);
+        A=A+K*(c*speed/s);
+        return (n+t*c)*speed;
+    }
+    A=A+Q*(e.raw/s);
+    Gm=outer(t,e.gm);Gp=outer(t,e.gp);
+    return n*speed+t*e.raw;
+}
 class Stepper {
     const Options& o_;const Wall& w_;const Derivative& d1_;const Derivative& d2_;
     size_t n_;std::vector<StencilRow> s1_,s2_;std::vector<Mat> l_,d_,u_,work_;
     Ring v_,z_,delta_,trial_,current_;
     void step(const Ring& r,double h){
-        d1_.compute(r,v_);if(o_.diffusion>0)d2_.compute(r,z_);
+        const bool current=o_.smoothing_metric=="current"&&o_.diffusion>0;
+        d1_.compute(r,v_);if(o_.diffusion>0&&!current)d2_.compute(r,z_);
         for(size_t i=0;i<n_;++i){
-            Mat A,B;const Vec F=linearize(v_[i],z_[i],o_.alpha,o_.diffusion,o_.smoothing=="tangent",A,B,o_.max_skew_ratio);
             const double k=-o_.theta*h;
-            l_[i]=(A*s1_[i].w[1]+B*s2_[i].w[1])*k;
-            d_[i]=eye()+(A*s1_[i].w[2]+B*s2_[i].w[2])*k;
-            u_[i]=(A*s1_[i].w[3]+B*s2_[i].w[3])*k;
+            Mat A,B;
+            Vec F;
+            if(current){
+                const auto e=spacing(r[prev(i,n_)],r[i],r[next(i,n_)],o_.diffusion);
+                Mat Gm,Gp;
+                F=linearize_current(v_[i],e,o_.alpha,o_.max_skew_ratio,A,Gm,Gp);
+                l_[i]=(A*s1_[i].w[1]+Gm)*k;
+                d_[i]=eye()+(A*s1_[i].w[2]-Gm-Gp)*k;
+                u_[i]=(A*s1_[i].w[3]+Gp)*k;
+            }else{
+                F=linearize(v_[i],z_[i],o_.alpha,o_.diffusion,o_.smoothing=="tangent",A,B,o_.max_skew_ratio);
+                l_[i]=(A*s1_[i].w[1]+B*s2_[i].w[1])*k;
+                d_[i]=eye()+(A*s1_[i].w[2]+B*s2_[i].w[2])*k;
+                u_[i]=(A*s1_[i].w[3]+B*s2_[i].w[3])*k;
+            }
             delta_[i]=F*h;
         }
         solve_cyclic(l_,d_,u_,delta_,work_);

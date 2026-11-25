@@ -158,6 +158,33 @@ with tempfile.TemporaryDirectory() as d:
     for angle in ('-1','90.1'):
         run(wall,d/'bad-angle.xyz',*args,'--max-skew-angle',angle,success=False)
     run(wall,d/'bad-smoothing.xyz',*args,'--smoothing','full','--max-skew-angle','5',success=False)
+    # Current physical spacing smoothing: independent of wall arc-length metric.
+    args=['--first-height','0.0001','--growth','1.15','--layers','60','--theta','0.5']
+    for eps in ('0.002','0.03'):
+        out=d/f'current-{eps}.xyz'
+        p=run(wall,out,*args,'--smoothing-metric','current','--diffusion',eps)
+        g=read_grid(out);assert (len(g[0]),len(g))==(161,61)
+        assert g[:2]==baseline[:2]
+        min_scaled_j(g)
+        assert sum(map(int,re.findall(r'steps=(\d+)',p.stdout)))==60
+        assert outer_mean_skew(g)<0.5*outer_mean_skew(baseline)
+        spacing=[math.dist(a,b) for a,b in zip(g[-1],g[-1][1:])]
+        if eps=='0.03': assert max(spacing)/min(spacing)<25
+        print(f'current spacing eps={eps}: outer mean skew {outer_mean_skew(g):.6f}, spacing ratio {max(spacing)/min(spacing):.6f}')
+    for angle in ('10','0'):
+        out=d/f'current-cap-{angle}.xyz'
+        run(wall,out,*args,'--smoothing-metric','current','--max-skew-angle',angle)
+        g=read_grid(out);min_scaled_j(g)
+        assert g[:2]==baseline[:2]
+        if angle=='0':
+            g0=read_grid(d/'zero-diffusion.xyz')
+            assert max(math.dist(a,b) for r,s in zip(g,g0) for a,b in zip(r,s))<1e-11
+    # Explicit mode uses the same RHS and current metric CFL estimate.
+    args=['--first-height','0.0001','--layers','5','--integrator','rk4','--stencil','three-point']
+    run(wall,d/'explicit-current.xyz',*args,'--smoothing-metric','current','--max-skew-angle','5')
+    min_scaled_j(read_grid(d/'explicit-current.xyz'))
+    run(wall,d/'bad-metric.xyz',*args,'--smoothing-metric','invalid',success=False)
+    run(wall,d/'bad-metric-full.xyz',*args,'--smoothing-metric','current','--smoothing','full',success=False)
     # Explicit max-step still enforces substeps in implicit mode (except exact first layer).
     out=d/'subdivided.xyz'
     p=run(EXAMPLES/'circle.csv',out,'--first-height','0.001','--growth','1','--layers','2','--max-step','0.0003')

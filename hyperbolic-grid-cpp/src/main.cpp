@@ -48,7 +48,7 @@ static size_t integer(const std::string& s) {
 }
 struct Options {
     std::string input,output="grid.xyz",mode="height",stencil,integrator="implicit";
-    std::string smoothing,first_layer,format="2d",i_order="cw",check="global";
+    std::string smoothing,smoothing_metric="wall",first_layer,format="2d",i_order="cw",check="global";
     double h=0,growth=1.15,alpha=-1,diffusion=0.002,cfl=0.25,max_step=0,theta=1,max_skew_angle=90;
     double max_skew_ratio=std::numeric_limits<double>::infinity();
     bool alpha_set=false, multiblock=false, quiet=false;
@@ -70,6 +70,8 @@ Options:
   --diffusion E           Nonnegative dimensionless coefficient (default 0.002)
                           Physical coefficient = E * max(bbox width,height)
   --smoothing tangent|full  Default tangent (height) or full (original)
+  --smoothing-metric wall|current  Tangent smoothing metric (default wall)
+                          current uses adjacent physical edge lengths
   --max-skew-angle DEG    Limit tangent/normal RHS speed ratio to tan(DEG)
                           0..90 degrees; 90=disabled (default), 0=pure normal
                           Enabled only for tangent smoothing
@@ -104,6 +106,7 @@ static Options parse(int argc,char** argv) {
         else if(k=="--layers") o.layers=integer(v); else if(k=="--mode") o.mode=v;
         else if(k=="--alpha") {o.alpha=number(v);o.alpha_set=true;} else if(k=="--diffusion") o.diffusion=number(v);
         else if(k=="--max-skew-angle") o.max_skew_angle=number(v);
+        else if(k=="--smoothing-metric") o.smoothing_metric=v;
         else if(k=="--smoothing") o.smoothing=v; else if(k=="--first-layer") o.first_layer=v;
         else if(k=="--stencil") o.stencil=v; else if(k=="--integrator") o.integrator=v;
         else if(k=="--theta") o.theta=number(v); else if(k=="--cfl") o.cfl=number(v); else if(k=="--max-step") o.max_step=number(v);
@@ -118,6 +121,8 @@ static Options parse(int argc,char** argv) {
     if(o.input.empty()||o.output.empty()||o.h<=0||o.layers==0) throw std::runtime_error("--input, positive --first-height and --layers are required");
     if(o.growth<=0||o.alpha<0||o.diffusion<0||o.cfl<=0||o.cfl>1||o.max_step<0||o.max_substeps==0) throw std::runtime_error("Invalid numeric control parameter");
     if(o.smoothing!="tangent"&&o.smoothing!="full") throw std::runtime_error("Invalid --smoothing");
+    if(o.smoothing_metric!="wall"&&o.smoothing_metric!="current")throw std::runtime_error("Invalid --smoothing-metric");
+    if(o.smoothing_metric=="current"&&o.smoothing!="tangent")throw std::runtime_error("--smoothing-metric current requires --smoothing tangent");
     if(o.max_skew_angle<0||o.max_skew_angle>90)throw std::runtime_error("Invalid --max-skew-angle (expected 0 to 90 degrees)");
     if(o.max_skew_angle<90){
         if(o.smoothing!="tangent")throw std::runtime_error("--max-skew-angle below 90 requires --smoothing tangent");
@@ -297,13 +302,25 @@ static Quality quality(const Ring& a,const Ring& b,const Ring& tangents) {
 class Marcher {
     const Options& o_;const Wall& w_;size_t n_;Derivative d1_,d2_;implicit::Stepper implicit_;
     Ring tangent_,curvature_,k1_,k2_,k3_,k4_,tmp_,trial_;
+    double current_bound_=0;
     double rhs(const Ring& r,Ring& k) {
-        d1_.compute(r,tangent_);if(o_.diffusion>0)d2_.compute(r,curvature_);
+        d1_.compute(r,tangent_);if(o_.diffusion>0&&o_.smoothing_metric=="wall")d2_.compute(r,curvature_);
+        current_bound_=0;
         double smin=std::numeric_limits<double>::infinity();
         for(size_t i=0;i<n_;++i){const Vec t=tangent_[i];const double s=norm(t);if(!(s>1e-12&&std::isfinite(s)))throw std::runtime_error("Degenerate tangent at point "+std::to_string(i+1));smin=std::min(smin,s);
             const Vec unit=t/s; k[i]=right_normal(unit)/std::pow(s,o_.alpha);
             if(o_.diffusion>0){
-                if(o_.smoothing=="tangent"&&o_.max_skew_angle<90){
+                if(o_.smoothing_metric=="current"){
+                    const auto e=implicit::spacing(r[prev(i,n_)],r[i],r[next(i,n_)],o_.diffusion);
+                    const double speed=std::pow(s,-o_.alpha);
+                    const double limit=o_.max_skew_angle<90?o_.max_skew_ratio*speed:std::numeric_limits<double>::infinity();
+                    const double vt=std::clamp(e.raw,-limit,limit);
+                    k[i]=k[i]+unit*vt;
+                    // Upper bound for the local length-gradient contribution
+                    // and the moving tangent (or active speed cap).
+                    const double bound=std::abs(vt)*std::max(1.0,o_.alpha)*d1_.bound()/s;
+                    current_bound_=std::max(current_bound_,bound+(std::abs(e.raw)<=limit?2*(norm(e.gm)+norm(e.gp)):0.0));
+                }else if(o_.smoothing=="tangent"&&o_.max_skew_angle<90){
                     const double limit=o_.max_skew_ratio*std::pow(s,-o_.alpha);
                     const double vt=std::clamp(o_.diffusion*dot(curvature_[i],unit),-limit,limit);
                     k[i]=k[i]+unit*vt;
@@ -340,7 +357,11 @@ public:
             // bounds the Jacobian of the nonlinear normal marching term.
             const double adv=std::max(1.0,o_.alpha)/std::pow(smin,1+o_.alpha);
             double dt=std::min(h-done,o_.cfl/(d1_.bound()*adv));
-            if(o_.diffusion>0) dt=std::min(dt,2*o_.cfl/(o_.diffusion*d2_.bound()));
+            if(o_.diffusion>0){
+                if(o_.smoothing_metric=="current"){
+                    if(current_bound_>0)dt=std::min(dt,o_.cfl/(d1_.bound()*adv+current_bound_));
+                }else dt=std::min(dt,2*o_.cfl/(o_.diffusion*d2_.bound()));
+            }
             if(o_.max_step>0)dt=std::min(dt,o_.max_step/w_.scale);
             if(!(dt>0&&std::isfinite(dt)&&done+dt>done))throw std::runtime_error("Marching substep underflow");
             bool accepted=false;
@@ -399,7 +420,7 @@ int main(int argc,char** argv){
         std::cout<<std::setprecision(7)<<"Wall points: "<<w.p.size()<<"; reference length: "<<w.scale<<"; min/max wall segment: "<<*minmax.first*w.scale<<"/"<<*minmax.second*w.scale<<'\n';
         std::cout<<"mode="<<o.mode<<" alpha="<<o.alpha<<" diffusion="<<o.diffusion<<" smoothing="<<o.smoothing<<" first-layer="<<o.first_layer<<" stencil="<<o.stencil<<" integrator="<<o.integrator;
         if(o.integrator=="implicit")std::cout<<" theta="<<o.theta;
-        std::cout<<" max-skew-angle="<<o.max_skew_angle;
+        std::cout<<" max-skew-angle="<<o.max_skew_angle<<" smoothing-metric="<<o.smoothing_metric;
         std::cout<<'\n';
         Marcher m(o,w);auto g=m.generate();write_plot3d(g,w,o);
         std::cout<<"Wrote "<<o.output<<" (I="<<w.p.size()+1<<", J="<<g.size()<<", I-order="<<o.i_order<<")\n";

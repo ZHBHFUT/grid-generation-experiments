@@ -78,6 +78,7 @@ x,y
 | `--alpha A` | height: 0; original: 1 | 非负速度指数 |
 | `--diffusion E` | 0.002 | 无量纲光顺系数，0 关闭光顺 |
 | `--smoothing tangent\|full` | height: tangent; original: full | 仅保留切向光顺或完整二阶导数光顺 |
+| `--smoothing-metric wall\|current` | wall | 切向光顺度量：初始壁面弧长差分，或当前层两侧实际点距的倒数差；current 仅支持 tangent 光顺 |
 | `--max-skew-angle DEG` | 90 | 瞬时切向/法向推进速度比的限制角度，单位度，0～90；90 不限制，0 纯法向；小于 90 仅支持 tangent 光顺 |
 | `--first-layer exact\|march` | height: exact; original: march | 精确法向偏移或方程积分 |
 | `--stencil three-point\|compact` | 隐式: three-point；显式: compact | 非均匀周期三点或紧致差分；隐式仅支持三点 |
@@ -202,6 +203,43 @@ phi=0 时取 c=0。切换点除 phi=0 外不可微，代码在等于阈值时选
 ```
 
 该参数约束的是半离散方程的瞬时推进方向，而非有限厚度网格单元四角的实际角度。大步长积分、轮廓曲率和周向差分等会引入实际角度偏差。限制过严可能使周向点距分布变差；必要时配合 --max-step 控制时间积分误差。测试数据见 TEST_RESULTS.txt。
+
+### 基于当前点距的切向光顺
+
+设置 `--smoothing-metric current`，将原来的切向光顺速度 epsilon*(t·D2 r) 替换为：
+
+```text
+em = r_i - r_(i-1), ep = r_(i+1) - r_i
+lm = |em|, lp = |ep|
+Vt0 = epsilon * (1/lm - 1/lp)
+F = Vn*n + Vt*t
+Vt = clamp(Vt0, -Vn*tan(phi), Vn*tan(phi))
+```
+
+上述长度和 epsilon 均采用程序内部的归一化量。换算至物理长度时 epsilon_phys = diffusion*L。若两侧长度相等，切向速度为零；否则向较长的一侧移动，趋向均匀点距。点距同比放大时，光顺速度按比例减小。不直接采用当前弧长下的二阶导数，因为精确弧长参数的二阶导数为法向曲率，无法有效驱动切向重分布。
+
+法向项及 D1（固定初始壁面弧长坐标）不变，精确偏移首层不变。每个隐式子步和显式 RK 阶段使用当前坐标重新计算实际点距，不做跨层冻结。默认 wall 保持原算法及旧网格结果；current 仅适用于 tangent 模式，不支持 full。diffusion=0 或 max-skew-angle=0 时仍为纯法向推进。
+
+未限幅时，令 gm=∂Vt0/∂r_(i-1)，gp=∂Vt0/∂r_(i+1)，则：
+
+```text
+gm = epsilon*em/lm^3
+gp = epsilon*ep/lp^3
+g0 = -gm-gp
+A = s^(-1-alpha)*R*[I-(1+alpha)P] + (Vt0/s)*Q
+Gm = t*gm^T
+Gp = t*gp^T
+```
+
+设 D1 的三点系数为 a-, a0, a+，新右端项对相邻坐标的 Jacobian 块为 A*a-+Gm、A*a0-Gm-Gp、A*a++Gp。若限幅激活，沿用此前限幅分支的 A，Gm=Gp=0。组装及求解仍为 O(M) 的周期 2×2 块三对角系统；显式积分器相应采用当前点距梯度和切向方向导数的局部范数估计调整子步（启发式稳定性控制）。
+
+推荐先尝试加密 NACA0012 60 层算例：
+
+```powershell
+.\build\Release\hypergrid.exe --input examples/naca0012_clustered.csv --output mesh.xyz --first-height 0.0001 --growth 1.15 --layers 60 --theta 0.5 --smoothing-metric current --diffusion 0.03
+```
+
+current 与 wall 的光顺强度不能直接用相同 diffusion 值比较。该算例中 current 的 0.02～0.03 较为均衡，外层平均和最大正交偏差及外层周向点距比优于旧算法限幅 5 度。该结论仅针对测试算例。过大的 diffusion 会削弱原有近壁加密并使锐尾缘单元质量下降；0.2 且不限幅的测试在第 2 层失败。严格限幅和强光顺同时使用可能导致更多回退，并不保证更好的点距分布。不要将瞬时速度限幅解释为单元角度的硬约束。完整测试见 TEST_RESULTS.txt。
 
 ### 稳定性与质量
 
