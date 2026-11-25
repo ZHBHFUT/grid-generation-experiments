@@ -142,3 +142,30 @@ Max excess above the instantaneous tangential/normal ratio bound
 2.22045e-16 (round-off).
 The cap is not a hard bound on discrete cell corner angles.
 No Windows/MSVC compilation test performed.
+
+============================================================
+Frozen effective diffusion limiter linearization
+============================================================
+Linux GCC 14.2.0 Release; CTest PASS (1/1, 2.12 s).
+Clustered NACA0012, 160 nodes, h1=1e-4, growth=1.15, 60 layers,
+theta=0.5, diffusion=0.002, no maximum substep unless specified.
+Max turn = maximum angle between successive radial segments among
+the last 20 cell layers.
+Cap deg   Analytic max turn   Frozen max turn
+3              6.0210             1.0879
+5             10.4057             1.2827
+7.5           15.5801             1.5333
+10            20.7548             1.8341
+15            30.8702             2.7802
+At cap 5, near-wall 10-layer mean skew analytic/frozen=1.1645/1.1707 deg;
+outer 10-layer mean skew=2.6193/2.7288; outer spacing ratio=27.848/26.395;
+min scaled Jacobian=0.143691 both; 60 advances both.
+Analytic with max-step 0.02: max turn=1.2543 deg, 191 advances.
+Explicit RK4 three-point: max turn=1.2550 deg, 17675 advances.
+All tested frozen cases above passed quality checks.
+9600 directional finite difference checks of frozen surrogate Jacobian:
+4434 active and 5166 inactive cap cases; max error 4.07563e-9;
+max RHS difference versus analytic cap 9.15513e-16.
+Regression checks unchanged first layer, reduced turns, zero/90 caps,
+explicit compatibility and invalid option rejection.
+Default remains analytic. No Windows/MSVC test performed.

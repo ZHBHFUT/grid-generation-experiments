@@ -48,7 +48,7 @@ static size_t integer(const std::string& s) {
 }
 struct Options {
     std::string input,output="grid.xyz",mode="height",stencil,integrator="implicit";
-    std::string smoothing,first_layer,format="2d",i_order="cw",check="global";
+    std::string limiter_linearization="analytic",smoothing,first_layer,format="2d",i_order="cw",check="global";
     double h=0,growth=1.15,alpha=-1,diffusion=0.002,cfl=0.25,max_step=0,theta=1,max_skew_angle=90;
     double max_skew_ratio=std::numeric_limits<double>::infinity();
     bool alpha_set=false, multiblock=false, quiet=false;
@@ -73,6 +73,8 @@ Options:
   --max-skew-angle DEG    Limit tangent/normal RHS speed ratio to tan(DEG)
                           0..90 degrees; 90=disabled (default), 0=pure normal
                           Enabled only for tangent smoothing
+  --limiter-linearization analytic|frozen  Implicit skew limiter Jacobian (default analytic)
+                          frozen retains diffusion using a lagged effective coefficient
   --first-layer exact|march Default exact (height) or march (original)
   --stencil three-point|compact  Default three-point (implicit) or compact (explicit)
   --integrator implicit|euler|rk2|rk4  Default implicit (linearized theta method)
@@ -104,6 +106,7 @@ static Options parse(int argc,char** argv) {
         else if(k=="--layers") o.layers=integer(v); else if(k=="--mode") o.mode=v;
         else if(k=="--alpha") {o.alpha=number(v);o.alpha_set=true;} else if(k=="--diffusion") o.diffusion=number(v);
         else if(k=="--max-skew-angle") o.max_skew_angle=number(v);
+        else if(k=="--limiter-linearization") o.limiter_linearization=v;
         else if(k=="--smoothing") o.smoothing=v; else if(k=="--first-layer") o.first_layer=v;
         else if(k=="--stencil") o.stencil=v; else if(k=="--integrator") o.integrator=v;
         else if(k=="--theta") o.theta=number(v); else if(k=="--cfl") o.cfl=number(v); else if(k=="--max-step") o.max_step=number(v);
@@ -118,6 +121,7 @@ static Options parse(int argc,char** argv) {
     if(o.input.empty()||o.output.empty()||o.h<=0||o.layers==0) throw std::runtime_error("--input, positive --first-height and --layers are required");
     if(o.growth<=0||o.alpha<0||o.diffusion<0||o.cfl<=0||o.cfl>1||o.max_step<0||o.max_substeps==0) throw std::runtime_error("Invalid numeric control parameter");
     if(o.smoothing!="tangent"&&o.smoothing!="full") throw std::runtime_error("Invalid --smoothing");
+    if(o.limiter_linearization!="analytic"&&o.limiter_linearization!="frozen")throw std::runtime_error("Invalid --limiter-linearization");
     if(o.max_skew_angle<0||o.max_skew_angle>90)throw std::runtime_error("Invalid --max-skew-angle (expected 0 to 90 degrees)");
     if(o.max_skew_angle<90){
         if(o.smoothing!="tangent")throw std::runtime_error("--max-skew-angle below 90 requires --smoothing tangent");
@@ -398,7 +402,7 @@ int main(int argc,char** argv){
         const auto minmax=std::minmax_element(w.ds.begin(),w.ds.end());
         std::cout<<std::setprecision(7)<<"Wall points: "<<w.p.size()<<"; reference length: "<<w.scale<<"; min/max wall segment: "<<*minmax.first*w.scale<<"/"<<*minmax.second*w.scale<<'\n';
         std::cout<<"mode="<<o.mode<<" alpha="<<o.alpha<<" diffusion="<<o.diffusion<<" smoothing="<<o.smoothing<<" first-layer="<<o.first_layer<<" stencil="<<o.stencil<<" integrator="<<o.integrator;
-        if(o.integrator=="implicit")std::cout<<" theta="<<o.theta;
+        if(o.integrator=="implicit")std::cout<<" theta="<<o.theta<<" limiter-linearization="<<o.limiter_linearization;
         std::cout<<" max-skew-angle="<<o.max_skew_angle;
         std::cout<<'\n';
         Marcher m(o,w);auto g=m.generate();write_plot3d(g,w,o);

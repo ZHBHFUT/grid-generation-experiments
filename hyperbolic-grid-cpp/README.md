@@ -203,6 +203,26 @@ phi=0 时取 c=0。切换点除 phi=0 外不可微，代码在等于阈值时选
 
 该参数约束的是半离散方程的瞬时推进方向，而非有限厚度网格单元四角的实际角度。大步长积分、轮廓曲率和周向差分等会引入实际角度偏差。限制过严可能使周向点距分布变差；必要时配合 --max-step 控制时间积分误差。测试数据见 TEST_RESULTS.txt。
 
+### 冻结等效光顺系数（可选半隐式限幅）
+
+新增 `--limiter-linearization analytic|frozen`，默认 analytic 保持旧算法。仅影响隐式积分器的切向限幅线性化；显式 RK 仍计算同一个限幅 RHS。
+
+在每次隐式子步起点计算：
+
+```text
+epsilon_eff = epsilon * min(1, Vn*tan(phi)/abs(Vt0))
+```
+
+未激活限幅时 epsilon_eff=epsilon；phi=0 时直接取 0。每次线性求解内冻结 epsilon_eff，但仍线性化法向速度和切向投影 P。由此 A、B 使用原不限幅 Jacobian 公式，将 epsilon 替换为 epsilon_eff。尤其 B=epsilon_eff*P，保留二阶隐式扩散。RHS 与原硬限幅一致（浮点舍入除外）。该矩阵是冻结系数代理方程的 Jacobian，不是原限幅方程的精确 Jacobian；限幅激活时 theta=0.5 不再保证二阶推进精度。
+
+推荐测试：
+
+```powershell
+.\build\Release\hypergrid.exe --input examples/naca0012_clustered.csv --output mesh.xyz --first-height 0.0001 --growth 1.15 --layers 60 --theta 0.5 --diffusion 0.002 --max-skew-angle 5 --limiter-linearization frozen
+```
+
+60 层加密 NACA0012 的外侧 20 层最大径向转角从 10.4057 度降到 1.2827 度，仍为 60 次推进（含首层偏移）。保留原质量检查和子步回退。不保证任意几何或步长均无振荡，也不保证最终单元角度严格小于限幅角度。
+
 ### 稳定性与质量
 
 显式推进步长结合一阶/二阶离散算子的保守无穷范数上界与局部切线模长估计；推荐 RK4。显式 Euler/RK2 对中心差分的某些波动模态不具有无条件稳定性，不能仅靠减小 CFL 保证所有复杂网格都稳定。此处步长控制是保守启发式而不是非线性严格稳定性证明。

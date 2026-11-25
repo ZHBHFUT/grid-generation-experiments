@@ -158,6 +158,37 @@ with tempfile.TemporaryDirectory() as d:
     for angle in ('-1','90.1'):
         run(wall,d/'bad-angle.xyz',*args,'--max-skew-angle',angle,success=False)
     run(wall,d/'bad-smoothing.xyz',*args,'--smoothing','full','--max-skew-angle','5',success=False)
+    # Frozen limiter linearization must reduce radial zig-zag without
+    # changing the exact wall/first layer or requiring extra substeps.
+    def outer_max_turn(g):
+        result=0.0
+        for a,b,c in zip(g[-21:-2],g[-20:-1],g[-19:]):
+            for x,y,z in zip(a[:-1],b[:-1],c[:-1]):
+                u,v=sub(y,x),sub(z,y)
+                result=max(result,math.degrees(math.atan2(abs(cross(u,v)),u[0]*v[0]+u[1]*v[1])))
+        return result
+    args=['--first-height','0.0001','--growth','1.15','--layers','60','--theta','0.5']
+    for angle in ('5','10'):
+        out=d/f'frozen-{angle}.xyz'
+        p=run(wall,out,*args,'--max-skew-angle',angle,'--limiter-linearization','frozen')
+        g=read_grid(out);old=read_grid(d/f'skew-{angle}.xyz')
+        assert g[:2]==old[:2] and min_scaled_j(g)>0.1
+        assert sum(map(int,re.findall(r'steps=(\d+)',p.stdout)))==60
+        assert outer_max_turn(g)<3 and outer_max_turn(g)<0.3*outer_max_turn(old)
+        assert outer_mean_skew(g)<outer_mean_skew(old)+0.3
+        print(f'frozen cap {angle}: maximum outer turn {outer_max_turn(g):.6f} vs analytic {outer_max_turn(old):.6f} degrees')
+    for angle in ('90','0'):
+        out=d/f'frozen-{angle}.xyz'
+        run(wall,out,*args,'--max-skew-angle',angle,'--limiter-linearization','frozen')
+        g=read_grid(out);old=read_grid(d/f'skew-{angle}.xyz')
+        if angle=='90': assert g==old
+        else: assert max(math.dist(a,b) for r,s in zip(g,old) for a,b in zip(r,s))<1e-11
+    # Explicit integrators evaluate the original clipped RHS in both modes.
+    args=['--first-height','0.0001','--layers','5','--integrator','rk4','--stencil','three-point','--max-skew-angle','5']
+    run(wall,d/'rk4-frozen.xyz',*args,'--limiter-linearization','frozen')
+    run(wall,d/'rk4-analytic.xyz',*args,'--limiter-linearization','analytic')
+    assert read_grid(d/'rk4-frozen.xyz')==read_grid(d/'rk4-analytic.xyz')
+    run(wall,d/'invalid-linearization.xyz',*args,'--limiter-linearization','bad',success=False)
     # Explicit max-step still enforces substeps in implicit mode (except exact first layer).
     out=d/'subdivided.xyz'
     p=run(EXAMPLES/'circle.csv',out,'--first-height','0.001','--growth','1','--layers','2','--max-step','0.0003')
