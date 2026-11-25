@@ -78,6 +78,7 @@ x,y
 | `--alpha A` | height: 0; original: 1 | 非负速度指数 |
 | `--diffusion E` | 0.002 | 无量纲光顺系数，0 关闭光顺 |
 | `--smoothing tangent\|full` | height: tangent; original: full | 仅保留切向光顺或完整二阶导数光顺 |
+| `--max-skew-angle DEG` | 90 | 瞬时切向/法向推进速度比的限制角度，单位度，0～90；90 不限制，0 纯法向；小于 90 仅支持 tangent 光顺 |
 | `--first-layer exact\|march` | height: exact; original: march | 精确法向偏移或方程积分 |
 | `--stencil three-point\|compact` | 隐式: three-point；显式: compact | 非均匀周期三点或紧致差分；隐式仅支持三点 |
 | `--integrator implicit\|euler\|rk2\|rk4` | implicit | 线性化隐式（默认）或原显式积分器 |
@@ -173,6 +174,34 @@ theta=1 为一阶线性化后退 Euler；theta=0.5 为光滑半离散方程的�
 默认每个目标层仅求解一次。如果块主元病态、坐标非法、Jacobian 或轮廓检查失败，保持已保存层不变，将该层均分为 2、4、8……个子步重新计算，最多加倍 10 次，且遵守 --max-substeps。所有中间轮廓及最终输出粗层均检查质量。精确偏移首层仍直接计算，不做隐式重试。--max-step 可主动限制子步以控制积分误差；--cfl 只影响显式积分。隐式不是非线性无条件稳定或保正保证。日志 steps 表示成功方案的子步数（精确偏移首层记 1），不包含失败重试。
 
 恢复原显式算法可使用 `--integrator rk4`（默认 compact）；如需仅比较时间推进算法，可在显式模式指定 `--stencil three-point`。
+
+### 切向速度限幅（正交性控制）
+
+在 tangent 光顺模式中，令 s=|v|，t=v/s，n=R t，Vn=s^(-alpha)，原始切向速度 Vt0=epsilon*(t·z)。指定角度 phi=--max-skew-angle（单位为度），令 k=tan(phi)：
+
+```text
+Vt = clamp(Vt0, -k*Vn, k*Vn)
+F = Vn*n + Vt*t
+```
+
+仅在超过上限的节点激活限幅；未激活的节点保留原光顺速度。phi=90 表示不限幅（默认，保持旧结果）；phi=0 表示纯法向推进。精确偏移首层不受影响。phi<90 仅支持 tangent 光顺，original 模式需要显式指定 --smoothing tangent 后才能使用。显式及隐式积分器均支持限幅。
+
+对隐式求解，未限幅时使用原解析 Jacobian。限幅激活时令 c=sign(Vt0)*k，F=s^(-alpha)*(R+c*I)*t，因此：
+
+```text
+A = s^(-1-alpha) * (R+c*I) * [I-(1+alpha)P]
+B = 0
+```
+
+phi=0 时取 c=0。切换点除 phi=0 外不可微，代码在等于阈值时选择未限幅分支。组装仍为周期 2×2 块三对角系统，复杂度 O(M)；沿用质量检查和失败时的子步回退。
+
+对前后缘加密的 NACA0012 算例（60 层，h1=1e-4，q=1.15，diffusion=0.002，theta=0.5），建议先对比 5、7.5、10 度：
+
+```powershell
+.\build\Release\hypergrid.exe --input examples/naca0012_clustered.csv --output mesh.xyz --first-height 0.0001 --growth 1.15 --layers 60 --theta 0.5 --max-skew-angle 5
+```
+
+该参数约束的是半离散方程的瞬时推进方向，而非有限厚度网格单元四角的实际角度。大步长积分、轮廓曲率和周向差分等会引入实际角度偏差。限制过严可能使周向点距分布变差；必要时配合 --max-step 控制时间积分误差。测试数据见 TEST_RESULTS.txt。
 
 ### 稳定性与质量
 

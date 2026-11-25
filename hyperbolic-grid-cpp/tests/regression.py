@@ -121,6 +121,43 @@ with tempfile.TemporaryDirectory() as d:
         err=max(abs(math.dist(a,b)-1e-4) for a,b in zip(g[0],g[1]))
         assert err<1e-12 and min_scaled_j(g)>0.1
         print(f'clustered NACA0012 theta={theta}: 60 advances, min scaled Jacobian {min_scaled_j(g):.6f}')
+    # Tangential speed cap: optional, independent of theta, and not a hard
+    # bound on finite-cell corner angles. Compare actual outer grid quality.
+    def outer_mean_skew(g):
+        angles=[]
+        for r,s in zip(g[-11:-1],g[-10:]):
+            for i in range(len(r)-1):
+                e,f=sub(r[i+1],r[i]),sub(s[i+1],s[i]);u,v=sub(s[i],r[i]),sub(s[i+1],r[i+1])
+                for a,b in ((e,u),(e,v),(f,u),(f,v)):
+                    c=abs(a[0]*b[0]+a[1]*b[1])/(math.hypot(*a)*math.hypot(*b))
+                    angles.append(math.degrees(math.asin(min(1.0,c))))
+        return sum(angles)/len(angles)
+    args=['--first-height','0.0001','--growth','1.15','--layers','60','--theta','0.5']
+    baseline=read_grid(d/'clustered-0.5.xyz')
+    for angle in ('90','10','5','0'):
+        out=d/f'skew-{angle}.xyz'
+        p=run(wall,out,*args,'--max-skew-angle',angle)
+        g=read_grid(out);assert (len(g[0]),len(g))==(161,61)
+        assert sum(map(int,re.findall(r'steps=(\d+)',p.stdout)))==60
+        min_scaled_j(g)
+        assert g[0]==baseline[0] and g[1]==baseline[1]
+        avg=outer_mean_skew(g)
+        if angle=='90': assert g==baseline
+        if angle=='10': assert avg<0.8*outer_mean_skew(baseline)
+        if angle=='5': assert avg<0.5*outer_mean_skew(baseline)
+        print(f'clustered NACA0012 angle cap {angle}: outer mean skew {avg:.6f} degrees')
+    out=d/'zero-diffusion.xyz';run(wall,out,*args,'--diffusion','0')
+    g=read_grid(out);g0=read_grid(d/'skew-0.xyz')
+    assert max(math.dist(a,b) for r,s in zip(g,g0) for a,b in zip(r,s))<1e-11
+    # Explicit RK4 accepts the same cap. With cap zero, the ODE is pure normal.
+    args=['--first-height','0.0001','--layers','5','--integrator','rk4','--stencil','three-point']
+    run(wall,d/'explicit-cap0.xyz',*args,'--max-skew-angle','0')
+    run(wall,d/'explicit-no-diff.xyz',*args,'--diffusion','0')
+    g=read_grid(d/'explicit-cap0.xyz');g0=read_grid(d/'explicit-no-diff.xyz')
+    assert max(math.dist(a,b) for r,s in zip(g,g0) for a,b in zip(r,s))<1e-9
+    for angle in ('-1','90.1'):
+        run(wall,d/'bad-angle.xyz',*args,'--max-skew-angle',angle,success=False)
+    run(wall,d/'bad-smoothing.xyz',*args,'--smoothing','full','--max-skew-angle','5',success=False)
     # Explicit max-step still enforces substeps in implicit mode (except exact first layer).
     out=d/'subdivided.xyz'
     p=run(EXAMPLES/'circle.csv',out,'--first-height','0.001','--growth','1','--layers','2','--max-step','0.0003')

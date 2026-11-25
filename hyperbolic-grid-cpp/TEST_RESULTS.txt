@@ -101,3 +101,44 @@ max solution error 5.979e-16.
 Regression suite also checks --max-step subdivision and rejection of invalid
 layers, incompatible stencils, clockwise and self-crossing walls.
 No Windows/MSVC timing or compilation test performed in this update.
+
+============================================================
+Tangential speed limiter (max-skew-angle)
+============================================================
+Linux GCC 14.2.0 Release / CTest PASS (1/1, 1.63 s).
+NACA0012 clustered wall, 160 distinct nodes, h1=1e-4, q=1.15,
+60 layers, diffusion=0.002, tangent smoothing, implicit theta=0.5,
+global contour and corner Jacobian checks enabled.
+
+Outer 10 layers: mean and max of absolute corner deviations from 90 deg.
+Spacing ratio: max/min outermost circumferential edge lengths.
+Angle (deg)    Mean (deg)   Max (deg)   Spacing ratio    Advances
+90 (off)          6.5385      28.5591           9.392          60
+30                6.5385      28.5591           9.392          60
+20                6.9224      29.1277          12.157          62
+15                5.7907      21.3985          16.243          61
+10                4.4557      18.1089          16.644          60
+7.5               3.6387      16.6092          19.698          60
+5                 2.6193      16.3588          27.848          60
+3                 1.9022      15.9305          35.226          60
+2                 1.5965      16.0947          39.278          60
+1                 1.3180      16.2897          48.925          60
+0                 1.1250      16.5137          90.669          60
+All cases passed local and global quality checks; min scaled Jacobian
+0.143691 for all (near wall). Advances include exact first-layer offset.
+For 5 and 10 degrees, single process elapsed time about 0.013-0.014 s
+including I/O, similar to the unlimited case. Individual timings are noisy.
+Angle cap zero agrees with the zero-diffusion grid to numerical tolerance.
+Angle cap 90 produces identical output to the previous default.
+Regression suite additionally exercises the explicit RK4 implementation and
+invalid angle / incompatible full-smoothing rejection.
+
+Standalone analytic Jacobian check (seed 42):
+9600 centered finite-difference directional derivative comparisons,
+6023 active and 3577 inactive, alpha=0,0.5,1,2;
+angles=0,1,5,10,30,90 degrees, excluding nondifferentiable switch points.
+Max absolute directional derivative error 3.18826e-10.
+Max excess above the instantaneous tangential/normal ratio bound
+2.22045e-16 (round-off).
+The cap is not a hard bound on discrete cell corner angles.
+No Windows/MSVC compilation test performed.

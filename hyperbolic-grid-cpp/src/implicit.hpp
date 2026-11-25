@@ -42,13 +42,26 @@ inline void solve_cyclic(const std::vector<Mat>& l,std::vector<Mat>& d,
 }
 // F(v,z) = R t / s^alpha + eps * P(t) z, v=r_eta, z=r_etaeta.
 // A=dF/dv, B=dF/dz; include the derivative of the tangent projector.
-inline Vec linearize(Vec v,Vec z,double alpha,double eps,bool tangent,Mat& A,Mat& B){
+inline Vec linearize(Vec v,Vec z,double alpha,double eps,bool tangent,Mat& A,Mat& B,
+                     double max_skew_ratio=std::numeric_limits<double>::infinity()){
     const double s=norm(v);
     if(!(s>1e-12&&std::isfinite(s)))throw std::runtime_error("Degenerate tangent in implicit step");
     const Vec t=v/s,n=right_normal(t);
     const Mat P=outer(t,t),Q=eye()-P,R{0,1,-1,0};
     const double speed=std::pow(s,-alpha);
     A=(R*(eye()-P*(1+alpha)))*(speed/s);
+    // Active cap: vt = sign(vt_raw) * max_skew_ratio * speed.
+    // Differentiate both the speed and the moving tangent; the clipped
+    // branch has zero derivative with respect to curvature z.
+    if(tangent&&std::isfinite(max_skew_ratio)){
+        const double raw=eps*dot(t,z),limit=max_skew_ratio*speed;
+        if(max_skew_ratio==0||std::abs(raw)>limit){
+            const double signed_ratio=std::copysign(max_skew_ratio,raw);
+            A=A+(eye()-P*(1+alpha))*(signed_ratio*speed/s);
+            B=Mat{};
+            return (n+t*signed_ratio)*speed;
+        }
+    }
     B=(tangent?P:eye())*eps;
     if(tangent&&eps>0)A=A+(Q*dot(t,z)+outer(t,Q*z))*(eps/s);
     return n*speed+B*z;
@@ -60,7 +73,7 @@ class Stepper {
     void step(const Ring& r,double h){
         d1_.compute(r,v_);if(o_.diffusion>0)d2_.compute(r,z_);
         for(size_t i=0;i<n_;++i){
-            Mat A,B;const Vec F=linearize(v_[i],z_[i],o_.alpha,o_.diffusion,o_.smoothing=="tangent",A,B);
+            Mat A,B;const Vec F=linearize(v_[i],z_[i],o_.alpha,o_.diffusion,o_.smoothing=="tangent",A,B,o_.max_skew_ratio);
             const double k=-o_.theta*h;
             l_[i]=(A*s1_[i].w[1]+B*s2_[i].w[1])*k;
             d_[i]=eye()+(A*s1_[i].w[2]+B*s2_[i].w[2])*k;
