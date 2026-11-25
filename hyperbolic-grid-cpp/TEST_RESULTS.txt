@@ -184,3 +184,27 @@ quality and outer mean skew, cap zero equivalence to pure normal,
 explicit RK4 short march, invalid metric and full-smoothing rejection.
 No Windows/MSVC test performed. No general guarantee of near-wall
 clustering preservation beyond the exact wall and first-layer nodes.
+
+============================================================
+Near-wall protection by a smooth distance-based diffusion ramp
+============================================================
+Linux GCC 14.2.0 Release; CTest PASS (1/1, 1.81 s).
+Clustered NACA0012, 60 layers, h1=1e-4, q=1.15, implicit theta=0.5,
+tangent smoothing, global checks. All angles are absolute deviations from
+90 degrees at cell corners. Ramp distances in input units, sampled at
+each output-layer midpoint.
+Metric   Diffusion  Ramp start/end   Mean1-10  Mean1-20  Mean51-60  Max51-60  Outer spacing ratio
+wall       .002       off               1.304      --        6.539     28.559     9.392
+current    .002       off               1.737      --        1.194     14.698    50.192
+current    .03        off              10.726     9.432      2.316      8.942    18.562
+current    .03        .005/.05          1.125     1.136      2.298      8.706    18.046
+current    .05        .005/.05          1.125     1.147      3.020     10.016    12.906
+All above passed local and global checks with 60 advances including
+the first exact offset. Ramp .005/.05 yields exactly the pure-normal
+grid through layer 15. First-layer corner mean 1.125 deg, max 81.739 deg
+at the sharp trailing-edge shared node, unchanged by diffusion.
+At the two wall-face corners meeting that node the same radial grid
+line cannot be perpendicular to both. This is a topology limitation.
+Tests additionally check disabled ramp reproduces old results, effective
+coefficient schedule, explicit RK4 protected layers, invalid ramp inputs.
+No Windows/MSVC test performed.

@@ -185,6 +185,29 @@ with tempfile.TemporaryDirectory() as d:
     min_scaled_j(read_grid(d/'explicit-current.xyz'))
     run(wall,d/'bad-metric.xyz',*args,'--smoothing-metric','invalid',success=False)
     run(wall,d/'bad-metric-full.xyz',*args,'--smoothing-metric','current','--smoothing','full',success=False)
+    # Near-wall protection: ramp the coefficient in nominal marching distance.
+    args=['--first-height','0.0001','--growth','1.15','--layers','60','--theta','0.5']
+    out=d/'ramp.xyz'
+    p=run(wall,out,*args,'--smoothing-metric','current','--diffusion','0.03','--smoothing-start','0.005','--smoothing-end','0.05')
+    g=read_grid(out);normal=read_grid(d/'zero-diffusion.xyz')
+    assert g[:16]==normal[:16], 'First 15 cell layers must match pure normal marching'
+    assert sum(map(int,re.findall(r'steps=(\d+)',p.stdout)))==60
+    assert min_scaled_j(g)>0.1 and outer_mean_skew(g)<2.5
+    spacing=[math.dist(a,b) for a,b in zip(g[-1],g[-1][1:])]
+    assert max(spacing)/min(spacing)<22
+    eps=list(map(float,re.findall(r'effective-diffusion=([0-9.eE+-]+)',p.stdout)))
+    assert len(eps)==60 and eps[:15]==[0]*15 and eps[-1]==0.03
+    assert all(a<=b for a,b in zip(eps,eps[1:]))
+    print(f'near-wall ramp: 15 pure-normal layers, outer mean skew {outer_mean_skew(g):.6f}, spacing ratio {max(spacing)/min(spacing):.6f}')
+    out=d/'ramp-off.xyz'
+    run(wall,out,*args,'--smoothing-metric','current','--diffusion','0.03','--smoothing-start','0','--smoothing-end','0')
+    assert read_grid(out)==read_grid(d/'current-0.03.xyz')
+    # Explicit integrator also honors the same coefficient schedule.
+    args=['--first-height','0.0001','--layers','5','--integrator','rk4','--stencil','three-point']
+    run(wall,d/'explicit-ramp.xyz',*args,'--smoothing-metric','current','--diffusion','0.03','--smoothing-start','0.005','--smoothing-end','0.05')
+    assert read_grid(d/'explicit-ramp.xyz')==read_grid(d/'explicit-no-diff.xyz')
+    for a,b in [('0.05','0.005'),('0.01','0.01'),('-0.01','0.05'),('0.01','0')]:
+        run(wall,d/'bad-ramp.xyz',*args,'--smoothing-start',a,'--smoothing-end',b,success=False)
     # Explicit max-step still enforces substeps in implicit mode (except exact first layer).
     out=d/'subdivided.xyz'
     p=run(EXAMPLES/'circle.csv',out,'--first-height','0.001','--growth','1','--layers','2','--max-step','0.0003')

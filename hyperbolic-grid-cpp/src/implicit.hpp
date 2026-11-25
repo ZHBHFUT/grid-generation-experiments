@@ -101,22 +101,22 @@ class Stepper {
     const Options& o_;const Wall& w_;const Derivative& d1_;const Derivative& d2_;
     size_t n_;std::vector<StencilRow> s1_,s2_;std::vector<Mat> l_,d_,u_,work_;
     Ring v_,z_,delta_,trial_,current_;
-    void step(const Ring& r,double h){
-        const bool current=o_.smoothing_metric=="current"&&o_.diffusion>0;
-        d1_.compute(r,v_);if(o_.diffusion>0&&!current)d2_.compute(r,z_);
+    void step(const Ring& r,double h,double eps){
+        const bool current=o_.smoothing_metric=="current"&&eps>0;
+        d1_.compute(r,v_);if(eps>0&&!current)d2_.compute(r,z_);
         for(size_t i=0;i<n_;++i){
             const double k=-o_.theta*h;
             Mat A,B;
             Vec F;
             if(current){
-                const auto e=spacing(r[prev(i,n_)],r[i],r[next(i,n_)],o_.diffusion);
+                const auto e=spacing(r[prev(i,n_)],r[i],r[next(i,n_)],eps);
                 Mat Gm,Gp;
                 F=linearize_current(v_[i],e,o_.alpha,o_.max_skew_ratio,A,Gm,Gp);
                 l_[i]=(A*s1_[i].w[1]+Gm)*k;
                 d_[i]=eye()+(A*s1_[i].w[2]-Gm-Gp)*k;
                 u_[i]=(A*s1_[i].w[3]+Gp)*k;
             }else{
-                F=linearize(v_[i],z_[i],o_.alpha,o_.diffusion,o_.smoothing=="tangent",A,B,o_.max_skew_ratio);
+                F=linearize(v_[i],z_[i],o_.alpha,eps,o_.smoothing=="tangent",A,B,o_.max_skew_ratio);
                 l_[i]=(A*s1_[i].w[1]+B*s2_[i].w[1])*k;
                 d_[i]=eye()+(A*s1_[i].w[2]+B*s2_[i].w[2])*k;
                 u_[i]=(A*s1_[i].w[3]+B*s2_[i].w[3])*k;
@@ -134,7 +134,7 @@ public:
         o_(o),w_(w),d1_(d1),d2_(d2),n_(w.p.size()),s1_(n_),s2_(n_),l_(n_),d_(n_),u_(n_),work_(n_-1),v_(n_),z_(n_),delta_(n_),trial_(n_),current_(n_){
         for(size_t i=0;i<n_;++i){const auto im=prev(i,n_);s1_[i]=make_stencil(1,0,w.ds[im],w.ds[i],0,false);s2_[i]=make_stencil(2,0,w.ds[im],w.ds[i],0,false);}
     }
-    size_t advance(Ring& r,double h,const Ring& start_tangent){
+    size_t advance(Ring& r,double h,const Ring& start_tangent,double eps){
         size_t subdivisions=1,attempted=0;
         if(o_.max_step>0){const double count=std::ceil(h/(o_.max_step/w_.scale));
             if(!std::isfinite(count)||count>static_cast<double>(o_.max_substeps)||count>=static_cast<double>(std::numeric_limits<size_t>::max()))throw std::runtime_error("Implicit substep limit exceeded by --max-step");
@@ -147,7 +147,7 @@ public:
             try{
                 for(size_t j=0;j<subdivisions;++j){
                     if(attempted==o_.max_substeps)throw std::runtime_error("Implicit substep limit exceeded");
-                    ++attempted;step(current_,h/static_cast<double>(subdivisions));current_.swap(trial_);
+                    ++attempted;step(current_,h/static_cast<double>(subdivisions),eps);current_.swap(trial_);
                 }
                 // Even if all intermediate fronts are valid, the final coarse
                 // quadrilaterals must also pass the same checks.

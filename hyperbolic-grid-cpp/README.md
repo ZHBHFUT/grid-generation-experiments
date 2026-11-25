@@ -79,6 +79,8 @@ x,y
 | `--diffusion E` | 0.002 | 无量纲光顺系数，0 关闭光顺 |
 | `--smoothing tangent\|full` | height: tangent; original: full | 仅保留切向光顺或完整二阶导数光顺 |
 | `--smoothing-metric wall\|current` | wall | 切向光顺度量：初始壁面弧长差分，或当前层两侧实际点距的倒数差；current 仅支持 tangent 光顺 |
+| `--smoothing-start H` | 0 | 名义推进距离小于该值时关闭光顺（输入长度单位） |
+| `--smoothing-end H` | 0 | 光顺系数逐渐恢复至 diffusion 的距离（输入长度单位）；两参数均为 0 时禁用渐增 |
 | `--max-skew-angle DEG` | 90 | 瞬时切向/法向推进速度比的限制角度，单位度，0～90；90 不限制，0 纯法向；小于 90 仅支持 tangent 光顺 |
 | `--first-layer exact\|march` | height: exact; original: march | 精确法向偏移或方程积分 |
 | `--stencil three-point\|compact` | 隐式: three-point；显式: compact | 非均匀周期三点或紧致差分；隐式仅支持三点 |
@@ -240,6 +242,25 @@ Gp = t*gp^T
 ```
 
 current 与 wall 的光顺强度不能直接用相同 diffusion 值比较。该算例中 current 的 0.02～0.03 较为均衡，外层平均和最大正交偏差及外层周向点距比优于旧算法限幅 5 度。该结论仅针对测试算例。过大的 diffusion 会削弱原有近壁加密并使锐尾缘单元质量下降；0.2 且不限幅的测试在第 2 层失败。严格限幅和强光顺同时使用可能导致更多回退，并不保证更好的点距分布。不要将瞬时速度限幅解释为单元角度的硬约束。完整测试见 TEST_RESULTS.txt。
+
+### 近壁保护：按名义推进距离逐步恢复光顺
+
+新 current 光顺的倒数点距差在加密壁面附近可能很大，不宜直接在全域使用较强的 diffusion。增加两个距离参数 a=--smoothing-start、b=--smoothing-end，要求 0<=a<b，默认两者均为 0（禁用渐增，保留原结果）。设 H 为累计名义推进距离，令
+
+```text
+u = clamp((H-a)/(b-a), 0, 1)
+epsilon_eff = diffusion * u^2 * (3-2*u)
+```
+
+在每个输出层的名义推进距离中点取 H，并在该层的隐式子步及显式 RK 各阶段保持该预定系数不变。实际点距、法向和其解析 Jacobian 仍按原算法随坐标更新。对 wall/current 和所有支持的积分器均有效，保留角度限幅及质量检查。逐层日志新增 effective-diffusion。距离参数使用输入坐标长度单位，height 模式下是名义距离而非逐点真实壁面距离；original 模式中仍为推进参数。渐增的系数冻结在输出层尺度，max-step 细分不会进一步细分这个系数。首层精确偏移不受影响。
+
+对于单位弦长加密 NACA0012，60 层、h1=1e-4、q=1.15，推荐：
+
+```powershell
+.\build\Release\hypergrid.exe --input examples/naca0012_clustered.csv --output mesh.xyz --first-height 0.0001 --growth 1.15 --layers 60 --theta 0.5 --smoothing-metric current --diffusion 0.03 --smoothing-start 0.005 --smoothing-end 0.05
+```
+
+前 15 层坐标与纯法向推进完全相同，前 10 层平均四角正交偏差从 10.7265 度降至 1.1250 度，外侧 10 层平均/最大偏差 2.298/8.706 度，最外层周向点距比 18.046，60 层仍只需 60 次推进（含首层偏移）。参数需结合实际边界层厚度选择。注意单块 O 型锐尾缘共用节点的两侧壁面切向并不共线，通常不可能使同一条法向网格线同时与两侧壁面正交；该改动不能消除锐尾缘固有的局部角度误差。
 
 ### 稳定性与质量
 

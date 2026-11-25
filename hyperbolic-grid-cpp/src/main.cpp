@@ -50,6 +50,7 @@ struct Options {
     std::string input,output="grid.xyz",mode="height",stencil,integrator="implicit";
     std::string smoothing,smoothing_metric="wall",first_layer,format="2d",i_order="cw",check="global";
     double h=0,growth=1.15,alpha=-1,diffusion=0.002,cfl=0.25,max_step=0,theta=1,max_skew_angle=90;
+    double smoothing_start=0,smoothing_end=0;
     double max_skew_ratio=std::numeric_limits<double>::infinity();
     bool alpha_set=false, multiblock=false, quiet=false;
     size_t layers=0,max_substeps=1000000;
@@ -72,6 +73,9 @@ Options:
   --smoothing tangent|full  Default tangent (height) or full (original)
   --smoothing-metric wall|current  Tangent smoothing metric (default wall)
                           current uses adjacent physical edge lengths
+  --smoothing-start H     No smoothing before nominal distance H (default 0)
+  --smoothing-end H       Smooth ramp to full strength at H (default 0: disabled)
+                          Both distances in input length units; end > start
   --max-skew-angle DEG    Limit tangent/normal RHS speed ratio to tan(DEG)
                           0..90 degrees; 90=disabled (default), 0=pure normal
                           Enabled only for tangent smoothing
@@ -105,6 +109,8 @@ static Options parse(int argc,char** argv) {
         else if(k=="--first-height") o.h=number(v); else if(k=="--growth") o.growth=number(v);
         else if(k=="--layers") o.layers=integer(v); else if(k=="--mode") o.mode=v;
         else if(k=="--alpha") {o.alpha=number(v);o.alpha_set=true;} else if(k=="--diffusion") o.diffusion=number(v);
+        else if(k=="--smoothing-start") o.smoothing_start=number(v);
+        else if(k=="--smoothing-end") o.smoothing_end=number(v);
         else if(k=="--max-skew-angle") o.max_skew_angle=number(v);
         else if(k=="--smoothing-metric") o.smoothing_metric=v;
         else if(k=="--smoothing") o.smoothing=v; else if(k=="--first-layer") o.first_layer=v;
@@ -123,6 +129,9 @@ static Options parse(int argc,char** argv) {
     if(o.smoothing!="tangent"&&o.smoothing!="full") throw std::runtime_error("Invalid --smoothing");
     if(o.smoothing_metric!="wall"&&o.smoothing_metric!="current")throw std::runtime_error("Invalid --smoothing-metric");
     if(o.smoothing_metric=="current"&&o.smoothing!="tangent")throw std::runtime_error("--smoothing-metric current requires --smoothing tangent");
+    if(o.smoothing_start<0||o.smoothing_end<0||
+       ((o.smoothing_start!=0||o.smoothing_end!=0)&&o.smoothing_end<=o.smoothing_start))
+        throw std::runtime_error("Require 0 <= --smoothing-start < --smoothing-end, or both zero (disabled)");
     if(o.max_skew_angle<0||o.max_skew_angle>90)throw std::runtime_error("Invalid --max-skew-angle (expected 0 to 90 degrees)");
     if(o.max_skew_angle<90){
         if(o.smoothing!="tangent")throw std::runtime_error("--max-skew-angle below 90 requires --smoothing tangent");
@@ -303,15 +312,15 @@ class Marcher {
     const Options& o_;const Wall& w_;size_t n_;Derivative d1_,d2_;implicit::Stepper implicit_;
     Ring tangent_,curvature_,k1_,k2_,k3_,k4_,tmp_,trial_;
     double current_bound_=0;
-    double rhs(const Ring& r,Ring& k) {
-        d1_.compute(r,tangent_);if(o_.diffusion>0&&o_.smoothing_metric=="wall")d2_.compute(r,curvature_);
+    double rhs(const Ring& r,Ring& k,double eps) {
+        d1_.compute(r,tangent_);if(eps>0&&o_.smoothing_metric=="wall")d2_.compute(r,curvature_);
         current_bound_=0;
         double smin=std::numeric_limits<double>::infinity();
         for(size_t i=0;i<n_;++i){const Vec t=tangent_[i];const double s=norm(t);if(!(s>1e-12&&std::isfinite(s)))throw std::runtime_error("Degenerate tangent at point "+std::to_string(i+1));smin=std::min(smin,s);
             const Vec unit=t/s; k[i]=right_normal(unit)/std::pow(s,o_.alpha);
-            if(o_.diffusion>0){
+            if(eps>0){
                 if(o_.smoothing_metric=="current"){
-                    const auto e=implicit::spacing(r[prev(i,n_)],r[i],r[next(i,n_)],o_.diffusion);
+                    const auto e=implicit::spacing(r[prev(i,n_)],r[i],r[next(i,n_)],eps);
                     const double speed=std::pow(s,-o_.alpha);
                     const double limit=o_.max_skew_angle<90?o_.max_skew_ratio*speed:std::numeric_limits<double>::infinity();
                     const double vt=std::clamp(e.raw,-limit,limit);
@@ -322,24 +331,24 @@ class Marcher {
                     current_bound_=std::max(current_bound_,bound+(std::abs(e.raw)<=limit?2*(norm(e.gm)+norm(e.gp)):0.0));
                 }else if(o_.smoothing=="tangent"&&o_.max_skew_angle<90){
                     const double limit=o_.max_skew_ratio*std::pow(s,-o_.alpha);
-                    const double vt=std::clamp(o_.diffusion*dot(curvature_[i],unit),-limit,limit);
+                    const double vt=std::clamp(eps*dot(curvature_[i],unit),-limit,limit);
                     k[i]=k[i]+unit*vt;
-                }else{Vec cur=curvature_[i];if(o_.smoothing=="tangent")cur=unit*dot(cur,unit);k[i]=k[i]+cur*o_.diffusion;}
+                }else{Vec cur=curvature_[i];if(o_.smoothing=="tangent")cur=unit*dot(cur,unit);k[i]=k[i]+cur*eps;}
             }
             if(!finite(k[i]))throw std::runtime_error("Nonfinite marching RHS");
         }return smin;
     }
-    void trial(const Ring& r,double h) {
+    void trial(const Ring& r,double h,double eps) {
         if(o_.integrator=="euler") {for(size_t i=0;i<n_;++i)trial_[i]=r[i]+k1_[i]*h;}
         else {
             for(size_t i=0;i<n_;++i)tmp_[i]=r[i]+k1_[i]*(h/2);
-            rhs(tmp_,k2_);
+            rhs(tmp_,k2_,eps);
             if(o_.integrator=="rk2")for(size_t i=0;i<n_;++i)trial_[i]=r[i]+k2_[i]*h;
             else {
                 for(size_t i=0;i<n_;++i)tmp_[i]=r[i]+k2_[i]*(h/2);
-                rhs(tmp_,k3_);
+                rhs(tmp_,k3_,eps);
                 for(size_t i=0;i<n_;++i)tmp_[i]=r[i]+k3_[i]*h;
-                rhs(tmp_,k4_);
+                rhs(tmp_,k4_,eps);
                 for(size_t i=0;i<n_;++i)trial_[i]=r[i]+(k1_[i]+k2_[i]*2+k3_[i]*2+k4_[i])*(h/6);
             }
         }
@@ -348,25 +357,25 @@ class Marcher {
 public:
     Marcher(const Options& o,const Wall& w):o_(o),w_(w),n_(w.p.size()),d1_(w.ds,1,o.stencil=="compact"),d2_(w.ds,2,o.stencil=="compact"),implicit_(o,w,d1_,d2_),tangent_(n_),curvature_(n_),k1_(n_),k2_(n_),k3_(n_),k4_(n_),tmp_(n_),trial_(n_){}
     Ring tangents(const Ring& r) {Ring t(n_);d1_.compute(r,t);for(size_t i=0;i<n_;++i)if(!(norm(t[i])>1e-12&&finite(t[i])))throw std::runtime_error("Degenerate tangent at point "+std::to_string(i+1));return t;}
-    size_t advance(Ring& r,double h) {
+    size_t advance(Ring& r,double h,double eps) {
         double done=0;size_t steps=0;
         while(done<h) {
             if(++steps>o_.max_substeps)throw std::runtime_error("Substep limit exceeded; reduce diffusion or clustering, or increase --max-substeps");
-            const double smin=rhs(r,k1_);
+            const double smin=rhs(r,k1_,eps);
             // Conservative operator-norm CFL estimates. First derivative factor
             // bounds the Jacobian of the nonlinear normal marching term.
             const double adv=std::max(1.0,o_.alpha)/std::pow(smin,1+o_.alpha);
             double dt=std::min(h-done,o_.cfl/(d1_.bound()*adv));
-            if(o_.diffusion>0){
+            if(eps>0){
                 if(o_.smoothing_metric=="current"){
                     if(current_bound_>0)dt=std::min(dt,o_.cfl/(d1_.bound()*adv+current_bound_));
-                }else dt=std::min(dt,2*o_.cfl/(o_.diffusion*d2_.bound()));
+                }else dt=std::min(dt,2*o_.cfl/(eps*d2_.bound()));
             }
             if(o_.max_step>0)dt=std::min(dt,o_.max_step/w_.scale);
             if(!(dt>0&&std::isfinite(dt)&&done+dt>done))throw std::runtime_error("Marching substep underflow");
             bool accepted=false;
             for(int attempt=0;attempt<16;++attempt){
-                try {trial(r,dt);accepted=true;break;} catch(const std::runtime_error&) {dt*=0.5;}
+                try {trial(r,dt,eps);accepted=true;break;} catch(const std::runtime_error&) {dt*=0.5;}
                 if(!(dt>0&&done+dt>done))break;
             }
             if(!accepted)throw std::runtime_error("Runge-Kutta stages failed after reducing substep");
@@ -381,12 +390,19 @@ public:
             try{
                 if(!(h>0&&std::isfinite(h)))throw std::runtime_error("Invalid layer increment");
                 const Ring& a=grid.back();Ring b=a;const Ring t=tangents(a);size_t steps=0;
+                double eps=o_.diffusion;
+                if(o_.smoothing_end>0){
+                    // Sample the smooth ramp at the output-layer midpoint.
+                    // Freeze only this prescribed coefficient within the layer.
+                    const double x=std::clamp(((xi+h/2)*w_.scale-o_.smoothing_start)/(o_.smoothing_end-o_.smoothing_start),0.0,1.0);
+                    eps*=x*x*(3-2*x);
+                }
                 if(j==1&&o_.first_layer=="exact") {for(size_t i=0;i<n_;++i)b[i]=a[i]+right_normal(t[i])/norm(t[i])*h;steps=1;}
-                else if(o_.integrator=="implicit")steps=implicit_.advance(b,h,t);
-                else steps=advance(b,h);
+                else if(o_.integrator=="implicit")steps=implicit_.advance(b,h,t,eps);
+                else steps=advance(b,h,eps);
                 const auto q=quality(a,b,t);if(o_.check=="global")check_contours(b,&a);
                 xi+=h;
-                if(!o_.quiet)std::cout<<"layer "<<std::setw(4)<<j<<" target="<<h*w_.scale<<" normal[min/mean/max]="<<q.min_h*w_.scale<<"/"<<q.mean_h*w_.scale<<"/"<<q.max_h*w_.scale<<" minJ="<<q.min_jac<<" steps="<<steps<<'\n';
+                if(!o_.quiet)std::cout<<"layer "<<std::setw(4)<<j<<" target="<<h*w_.scale<<" normal[min/mean/max]="<<q.min_h*w_.scale<<"/"<<q.mean_h*w_.scale<<"/"<<q.max_h*w_.scale<<" minJ="<<q.min_jac<<" steps="<<steps<<" effective-diffusion="<<(j==1&&o_.first_layer=="exact"?0:eps)<<'\n';
                 grid.push_back(std::move(b));h*=o_.growth;
             }catch(const std::exception& e){throw std::runtime_error("Layer "+std::to_string(j)+": "+e.what());}
         }
@@ -421,6 +437,7 @@ int main(int argc,char** argv){
         std::cout<<"mode="<<o.mode<<" alpha="<<o.alpha<<" diffusion="<<o.diffusion<<" smoothing="<<o.smoothing<<" first-layer="<<o.first_layer<<" stencil="<<o.stencil<<" integrator="<<o.integrator;
         if(o.integrator=="implicit")std::cout<<" theta="<<o.theta;
         std::cout<<" max-skew-angle="<<o.max_skew_angle<<" smoothing-metric="<<o.smoothing_metric;
+        if(o.smoothing_end>0)std::cout<<" smoothing-start="<<o.smoothing_start<<" smoothing-end="<<o.smoothing_end;
         std::cout<<'\n';
         Marcher m(o,w);auto g=m.generate();write_plot3d(g,w,o);
         std::cout<<"Wrote "<<o.output<<" (I="<<w.p.size()+1<<", J="<<g.size()<<", I-order="<<o.i_order<<")\n";
