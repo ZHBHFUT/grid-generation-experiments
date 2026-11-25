@@ -1,0 +1,57 @@
+Linux build and regression test results
+g++ (Debian 14.2.0-19) 14.2.0
+cmake version 3.31.6
+
+circle / physical: max radius error 1.221e-15; min scaled Jacobian 0.999657
+circle / original: max radius error 1.245e-12; min scaled Jacobian 0.999657
+NACA0012: max first-height error 1.353e-17; min scaled Jacobian 0.142694
+nonuniform / compact / rk2: min scaled Jacobian 0.999101
+nonuniform / three-point / euler: min scaled Jacobian 0.999101
+invalid CSV/clockwise/self-intersection rejection: passed
+All regression checks passed.
+
+NACA0012 example marching log:
+Wall points: 160; reference length: 1; min/max wall segment: 0.01249756/0.01274718
+mode=height alpha=0 diffusion=0.002 smoothing=tangent first-layer=exact stencil=compact integrator=rk4
+layer    1 target=0.0001 normal[min/mean/max]=0.0001/0.0001/0.0001 minJ=0.1426936 steps=1
+layer    2 target=0.000115 normal[min/mean/max]=0.0001149921/0.0001149999/0.000115 minJ=0.1492891 steps=2
+layer    3 target=0.00013225 normal[min/mean/max]=0.0001322392/0.0001322499/0.00013225 minJ=0.1567604 steps=2
+layer    4 target=0.0001520875 normal[min/mean/max]=0.0001520728/0.0001520873/0.0001520875 minJ=0.1651839 steps=2
+layer    5 target=0.0001749006 normal[min/mean/max]=0.0001748805/0.0001749003/0.0001749007 minJ=0.1746545 steps=2
+layer    6 target=0.0002011357 normal[min/mean/max]=0.000201108/0.0002011353/0.0002011358 minJ=0.1852682 steps=2
+layer    7 target=0.0002313061 normal[min/mean/max]=0.000231268/0.0002313056/0.0002313061 minJ=0.1971204 steps=2
+layer    8 target=0.000266002 normal[min/mean/max]=0.0002659495/0.0002660013/0.0002660021 minJ=0.2103019 steps=2
+layer    9 target=0.0003059023 normal[min/mean/max]=0.0003058299/0.0003059013/0.0003059024 minJ=0.2248958 steps=2
+layer   10 target=0.0003517876 normal[min/mean/max]=0.0003516878/0.0003517863/0.0003517879 minJ=0.240972 steps=2
+layer   11 target=0.0004045558 normal[min/mean/max]=0.0004044181/0.0004045539/0.0004045561 minJ=0.2585828 steps=2
+layer   12 target=0.0004652391 normal[min/mean/max]=0.0004650494/0.0004652365/0.0004652397 minJ=0.2777565 steps=2
+layer   13 target=0.000535025 normal[min/mean/max]=0.000534764/0.0005350214/0.0005350258 minJ=0.2984931 steps=2
+layer   14 target=0.0006152788 normal[min/mean/max]=0.0006149207/0.0006152739/0.0006152799 minJ=0.3207587 steps=2
+layer   15 target=0.0007075706 normal[min/mean/max]=0.0007070812/0.0007075639/0.0007075721 minJ=0.3444824 steps=2
+layer   16 target=0.0008137062 normal[min/mean/max]=0.0008130404/0.0008136972/0.0008137083 minJ=0.3695544 steps=2
+layer   17 target=0.0009357621 normal[min/mean/max]=0.0009348614/0.0009357501/0.0009357648 minJ=0.3958271 steps=3
+layer   18 target=0.001076126 normal[min/mean/max]=0.001074916/0.001076111/0.00107613 minJ=0.4231176 steps=3
+layer   19 target=0.001237545 normal[min/mean/max]=0.001235931/0.001237525/0.001237553 minJ=0.4512138 steps=3
+layer   20 target=0.001423177 normal[min/mean/max]=0.001421041/0.001423151/0.001423244 minJ=0.4798827 steps=3
+layer   21 target=0.001636654 normal[min/mean/max]=0.001633851/0.00163662/0.001636838 minJ=0.5088789 steps=4
+layer   22 target=0.001882152 normal[min/mean/max]=0.001878504/0.001882109/0.001882527 minJ=0.5379548 steps=4
+layer   23 target=0.002164475 normal[min/mean/max]=0.002159761/0.002164422/0.002165124 minJ=0.5668702 steps=5
+layer   24 target=0.002489146 normal[min/mean/max]=0.002483087/0.002489079/0.002490127 minJ=0.5954005 steps=5
+layer   25 target=0.002862518 normal[min/mean/max]=0.002854755/0.002862431/0.002863795 minJ=0.6233435 steps=6
+layer   26 target=0.003291895 normal[min/mean/max]=0.003281951/0.003291779/0.003293223 minJ=0.6505258 steps=6
+layer   27 target=0.00378568 normal[min/mean/max]=0.003772909/0.003785514/0.003786447 minJ=0.6768068 steps=7
+layer   28 target=0.004353531 normal[min/mean/max]=0.004337057/0.004353285/0.004353739 minJ=0.7020826 steps=8
+layer   29 target=0.005006561 normal[min/mean/max]=0.004985196/0.005006189/0.005006561 minJ=0.7262869 steps=9
+layer   30 target=0.005757545 normal[min/mean/max]=0.005729723/0.005756985/0.005757545 minJ=0.7493907 steps=10
+layer   31 target=0.006621177 normal[min/mean/max]=0.006584903/0.006620357/0.006621177 minJ=0.7713962 steps=11
+layer   32 target=0.007614354 normal[min/mean/max]=0.007567229/0.007613201/0.007614354 minJ=0.7923258 steps=13
+layer   33 target=0.008756507 normal[min/mean/max]=0.008695877/0.008754956/0.00875674 minJ=0.8122064 steps=14
+layer   34 target=0.01006998 normal[min/mean/max]=0.009993253/0.01006796/0.01007449 minJ=0.8238327 steps=16
+layer   35 target=0.01158048 normal[min/mean/max]=0.01148553/0.01157789/0.01159006 minJ=0.818371 steps=18
+layer   36 target=0.01331755 normal[min/mean/max]=0.01320226/0.01331422/0.01332879 minJ=0.8155444 steps=21
+layer   37 target=0.01531519 normal[min/mean/max]=0.01516426/0.01531084/0.01531877 minJ=0.8156353 steps=24
+layer   38 target=0.01761246 normal[min/mean/max]=0.01741771/0.01760676/0.01761513 minJ=0.81853 steps=28
+layer   39 target=0.02025433 normal[min/mean/max]=0.02000836/0.02024692/0.02026456 minJ=0.8238199 steps=31
+layer   40 target=0.02329248 normal[min/mean/max]=0.02299067/0.02328299/0.02331348 minJ=0.8310289 steps=36
+Nominal total marching distance: 0.177909
+Wrote /tmp/naca.xyz (I=161, J=41, I-order=cw)
